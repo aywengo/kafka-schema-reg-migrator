@@ -26,4 +26,23 @@ jobs:
 
       - name: Run tests
         run: |
-          docker run --rm kafka-schema-reg-migrator:test bash -c "cd tests && ./run_tests.sh" 
+          # Make test script executable
+          chmod +x tests/run_tests.sh
+          
+          # Run tests with Docker Compose
+          cd tests
+          docker-compose up -d
+          
+          # Wait for services to be ready
+          echo "Waiting for services to be ready..."
+          sleep 30
+          
+          # Run the tests
+          docker run --rm \
+            --network tests_default \
+            -v $(pwd):/app/tests \
+            kafka-schema-reg-migrator:test \
+            bash -c "cd tests && ./run_tests.sh"
+          
+          # Clean up
+          docker-compose down 

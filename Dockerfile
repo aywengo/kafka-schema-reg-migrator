@@ -16,5 +16,8 @@ RUN chmod +x tests/run_tests.sh
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
 
-# Default command
-ENTRYPOINT ["python", "schema_registry_migrator.py"] 
+# Default command for running the application
+ENTRYPOINT ["python", "schema_registry_migrator.py"]
+
+# Command for running tests
+CMD ["bash", "-c", "cd tests && ./run_tests.sh"] 
