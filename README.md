@@ -117,14 +117,6 @@ To run tests in Docker:
 docker run -it --env-file .env kafka-schema-reg-migrator bash -c "cd tests && ./run_tests.sh"
 ```
 
-### Kubernetes
-
-You can run the migrator as a one-time job in a Kubernetes cluster. This is useful for automated migrations in CI/CD pipelines or scheduled maintenance windows.
-
-The migrator can be deployed as a Kubernetes Job with proper secret management for authentication credentials. The job will run once and complete when the migration is finished.
-
-See the [Kubernetes Deployment Guide](docs/run-in-kubernetes.md). 
-
 ### Environment Variables
 
 The following environment variables are required:
@@ -139,6 +131,14 @@ Optional variables:
 - `LOG_LEVEL`: Logging level (DEBUG, INFO, WARNING, ERROR)
 
 For detailed information about running the tool in Docker, see [Run in Docker](docs/run-in-docker.md).
+
+### Kubernetes Usage
+
+You can run the migrator as a one-time job in a Kubernetes cluster. This is useful for automated migrations in CI/CD pipelines or scheduled maintenance windows.
+
+The migrator can be deployed as a Kubernetes Job with proper secret management for authentication credentials. The job will run once and complete when the migration is finished.
+
+See the [Kubernetes Deployment Guide](docs/run-in-kubernetes.md). 
 
 ## Output
 
