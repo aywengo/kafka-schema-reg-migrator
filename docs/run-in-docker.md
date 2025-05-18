@@ -27,6 +27,7 @@ docker run -e SOURCE_SCHEMA_REGISTRY_URL=http://source:8081 \
 | `DEST_PASSWORD` | Password for destination Schema Registry authentication | No | - |
 | `SOURCE_CONTEXT` | Context name for source Schema Registry | No | - |
 | `DEST_CONTEXT` | Context name for destination Schema Registry | No | - |
+| `DEST_IMPORT_MODE` | Enable import mode to preserve schema IDs during migration | No | false |
 | `LOG_LEVEL` | Logging level (DEBUG, INFO, WARNING, ERROR) | No | INFO |
 
 ## Using Environment File
@@ -45,12 +46,37 @@ DEST_USERNAME=dest_user
 DEST_PASSWORD=dest_pass
 SOURCE_CONTEXT=source-context
 DEST_CONTEXT=dest-context
+DEST_IMPORT_MODE=false
 LOG_LEVEL=DEBUG
 ```
 
 2. Run the container with the environment file:
 ```bash
 docker run --env-file .env kafka-schema-reg-migrator:latest
+```
+
+## Import Mode
+
+The `DEST_IMPORT_MODE` setting enables a special mode for schema migration that preserves the original schema IDs from the source registry. This is particularly useful when:
+
+- You need to maintain the same schema IDs across registries
+- Downstream systems depend on specific schema IDs
+- You need to ensure exact schema ID matching between source and destination
+
+When `DEST_IMPORT_MODE` is set to `true`:
+- The tool adds a special header `X-Registry-Import: true` to schema registration requests
+- The Schema Registry preserves the original schema IDs instead of generating new ones
+- Schema content and version history remain unchanged
+- Only the schema IDs are preserved
+
+Note that using import mode requires appropriate permissions on the destination registry. The import mode works in conjunction with other settings like `ENABLE_MIGRATION` and `DRY_RUN`.
+
+Example configuration for import mode:
+```bash
+SOURCE_SCHEMA_REGISTRY_URL=http://source:8081
+DEST_SCHEMA_REGISTRY_URL=http://dest:8081
+ENABLE_MIGRATION=true
+DEST_IMPORT_MODE=true  # Enable import mode to preserve schema IDs
 ```
 
 ## Example with Docker Compose
@@ -71,6 +97,7 @@ services:
       - DEST_PASSWORD=dest_pass
       - SOURCE_CONTEXT=source-context
       - DEST_CONTEXT=dest-context
+      - DEST_IMPORT_MODE=false
       - LOG_LEVEL=DEBUG
 ```
 
