@@ -1,0 +1,108 @@
+version: '3'
+
+services:
+  kafka-source:
+    image: confluentinc/cp-kafka:7.5.0
+    hostname: kafka-source
+    container_name: kafka-source
+    ports:
+      - "39092:9092"
+      - "39094:9094"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka-source:9094
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9094
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-source:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_LOG_DIRS: /tmp/kraft-combined-logs
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+      CLUSTER_ID: "v-qDsAQhRMOEe3xNzCmBuQ"
+      KAFKA_INITIAL_BROKER_REGISTRATION_TIMEOUT_MS: 60000
+    command: >
+      bash -c "
+        echo 'Waiting for Kafka to be ready...' &&
+        /etc/confluent/docker/run"
+    healthcheck:
+      test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+  kafka-dest:
+    image: confluentinc/cp-kafka:7.5.0
+    hostname: kafka-dest
+    container_name: kafka-dest
+    ports:
+      - "39093:9093"
+      - "39095:9095"
+    environment:
+      KAFKA_NODE_ID: 2
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 2@kafka-dest:9095
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9093,CONTROLLER://0.0.0.0:9095
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-dest:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_LOG_DIRS: /tmp/kraft-combined-logs
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+      CLUSTER_ID: "RSpshNlPRv24_B5BA8G08w"
+      KAFKA_INITIAL_BROKER_REGISTRATION_TIMEOUT_MS: 60000
+    command: >
+      bash -c "
+        echo 'Waiting for Kafka to be ready...' &&
+        /etc/confluent/docker/run"
+    healthcheck:
+      test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:9093", "--list"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+  schema-registry-source:
+    image: confluentinc/cp-schema-registry:7.5.0
+    depends_on:
+      kafka-source:
+        condition: service_healthy
+    ports:
+      - "38081:8081"
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry-source
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://kafka-source:9092
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+      SCHEMA_REGISTRY_DELETE_SUBJECT_ENABLED: "true"
+      SCHEMA_REGISTRY_DELETE_VERSION_ENABLED: "true"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/subjects"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  schema-registry-dest:
+    image: confluentinc/cp-schema-registry:7.5.0
+    depends_on:
+      kafka-dest:
+        condition: service_healthy
+    ports:
+      - "38082:8082"
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry-dest
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://kafka-dest:9093
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8082
+      SCHEMA_REGISTRY_DELETE_SUBJECT_ENABLED: "true"
+      SCHEMA_REGISTRY_DELETE_VERSION_ENABLED: "true"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8082/subjects"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s 
