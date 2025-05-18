@@ -1,21 +1,20 @@
-FROM python:3.9-slim-bullseye
+FROM python:3.11.8-alpine3.20 as builder
 
 WORKDIR /app
-
-# Install dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt && \
-    rm -rf /root/.cache/pip
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
+FROM python:3.11.8-alpine3.20
+
+WORKDIR /app
+COPY --from=builder /usr/local/lib/python3.11/site-packages/ /usr/local/lib/python3.11/site-packages/
 COPY schema_registry_migrator.py .
 
-# Set environment variables
+RUN apk add --no-cache curl
+
 ENV PYTHONUNBUFFERED=1
 
-# Create non-root user
-RUN useradd -m appuser && chown -R appuser:appuser /app
+RUN adduser -D appuser && chown -R appuser:appuser /app
 USER appuser
 
-# Default command for running the application
 ENTRYPOINT ["python", "schema_registry_migrator.py"]
