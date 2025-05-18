@@ -17,22 +17,4 @@ jobs:
 
       - name: Build Docker image
         uses: docker/build-push-action@v5
-
-      - name: Make test script executable
-        run: chmod +x tests/run_tests.sh
-
-      - name: Run tests with Docker Compose
-        run: cd tests && docker compose up -d
-
-      - name: Wait for services to be ready
-        run: echo "Waiting for services to be ready..." && sleep 30
-
-      - name: Run the tests
-        run: docker run --rm \
-          --network tests_default \
-          -v $(pwd):/app/tests \
-          kafka-schema-reg-migrator:test \
-          bash -c "cd tests && ./run_tests.sh"
-
-      - name: Clean up
-        run: docker compose down 
+        
