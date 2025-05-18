@@ -35,27 +35,37 @@ cd tests
 
 The test suite includes the following test cases:
 
-1. **Comparison-only Test**
+1. **Authentication Validation Test**
+   - Tests username/password validation logic
+   - Verifies that both credentials must be provided together or neither
+   - Tests four scenarios:
+     * Both username and password provided (should succeed)
+     * Neither username nor password provided (should succeed)
+     * Only username provided (should fail)
+     * Only password provided (should fail)
+   - Ensures proper error messages for invalid combinations
+
+2. **Comparison-only Test**
    - Compares source and destination registries
    - No changes are made to either registry
    - Verifies schema statistics and version information
 
-2. **Cleanup Test**
+3. **Cleanup Test**
    - Runs with `CLEANUP_DESTINATION=true` and `DRY_RUN=true`
    - Verifies that the destination registry is empty after cleanup
    - No actual migration is performed
 
-3. **Normal Migration Test**
+4. **Normal Migration Test**
    - Migrates schemas from source to destination
    - Verifies successful migration
    - Checks schema versions and compatibility
 
-4. **Import Mode Migration Test**
+5. **Import Mode Migration Test**
    - Migrates schemas in import mode
    - Verifies that schema IDs are preserved
    - Checks schema compatibility
 
-5. **Context Migration Test**
+6. **Context Migration Test**
    - Migrates schemas from default context to a specific context
    - Verifies context creation and schema migration
    - Checks subject naming in the destination context

@@ -27,6 +27,10 @@ class SchemaRegistryClient:
         context: Optional[str] = None,
         import_mode: bool = False
     ):
+        # Validate username and password
+        if (username is None) != (password is None):
+            raise ValueError("Both username and password must be provided, or neither")
+            
         self.url = url.rstrip('/')
         self.auth = (username, password) if username and password else None
         self.context = context

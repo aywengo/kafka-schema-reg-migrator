@@ -9,6 +9,9 @@ import subprocess
 from typing import Dict, List
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+import sys
+sys.path.append('..')  # Add parent directory to path
+from schema_registry_migrator import SchemaRegistryClient
 
 # Configure logging
 logging.basicConfig(
@@ -388,7 +391,52 @@ def verify_migration_with_dest_context(source_url: str, dest_url: str) -> bool:
         logger.error(f"Verification of migration with destination context failed: {e}")
         return False
 
+def test_auth_validation():
+    """Test username/password validation."""
+    # Test case 1: Both username and password provided
+    try:
+        client = SchemaRegistryClient(
+            url='http://localhost:38081',
+            username='test_user',
+            password='test_pass'
+        )
+        assert client.auth == ('test_user', 'test_pass')
+    except ValueError as e:
+        assert False, f"Should not raise ValueError: {e}"
+
+    # Test case 2: Neither username nor password provided
+    try:
+        client = SchemaRegistryClient(url='http://localhost:38081')
+        assert client.auth is None
+    except ValueError as e:
+        assert False, f"Should not raise ValueError: {e}"
+
+    # Test case 3: Only username provided
+    try:
+        SchemaRegistryClient(
+            url='http://localhost:38081',
+            username='test_user'
+        )
+        assert False, "Should raise ValueError"
+    except ValueError as e:
+        assert str(e) == "Both username and password must be provided, or neither"
+
+    # Test case 4: Only password provided
+    try:
+        SchemaRegistryClient(
+            url='http://localhost:38081',
+            password='test_pass'
+        )
+        assert False, "Should raise ValueError"
+    except ValueError as e:
+        assert str(e) == "Both username and password must be provided, or neither"
+
 def main():
+    # Test auth validation
+    logger.info("Testing authentication validation...")
+    test_auth_validation()
+    logger.info("Authentication validation tests passed")
+
     # Test 1: Comparison only
     logger.info("Test 1: Comparison only")
     if not run_comparison():

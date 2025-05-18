@@ -55,9 +55,47 @@ fi
 echo "Waiting for Kafka to be fully ready..."
 sleep 5
 
+# Clean up destination registry before starting tests
+echo "Cleaning up destination registry..."
+curl -X DELETE http://localhost:38082/subjects/* || true
+
+# Wait for cleanup to complete
+echo "Waiting for destination registry cleanup to complete..."
+max_retries=30
+retry_interval=2
+for i in $(seq 1 $max_retries); do
+    subjects=$(curl -s http://localhost:38082/subjects)
+    if [ "$subjects" = "[]" ]; then
+        echo "Destination registry cleanup completed"
+        break
+    fi
+    if [ $i -eq $max_retries ]; then
+        echo "Destination registry cleanup failed"
+        exit 1
+    fi
+    echo "Waiting for destination registry cleanup... ($i/$max_retries)"
+    sleep $retry_interval
+done
+
 # Populate source schema registry
 echo "Populating source schema registry..."
 python populate_source.py
+
+# Wait for source registry population to complete
+echo "Waiting for source registry population to complete..."
+for i in $(seq 1 $max_retries); do
+    subjects=$(curl -s http://localhost:38081/subjects)
+    if echo "$subjects" | grep -q "test-value"; then
+        echo "Source registry population completed"
+        break
+    fi
+    if [ $i -eq $max_retries ]; then
+        echo "Source registry population failed"
+        exit 1
+    fi
+    echo "Waiting for source registry population... ($i/$max_retries)"
+    sleep $retry_interval
+done
 
 # Run migration tests
 echo "Running migration tests..."
