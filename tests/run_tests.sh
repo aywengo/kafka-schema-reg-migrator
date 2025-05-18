@@ -1,6 +1,25 @@
 #!/bin/bash
 
-set -e
+# Parse command line arguments
+DEBUG_MODE=false
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --debug)
+            DEBUG_MODE=true
+            shift
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Usage: $0 [--debug]"
+            exit 1
+            ;;
+    esac
+done
+
+# Only exit on error if not in debug mode
+if [ "$DEBUG_MODE" = false ]; then
+    set -e
+fi
 
 # Function to wait for a service to be ready
 wait_for_service() {
@@ -26,8 +45,13 @@ wait_for_service() {
 
 # Function to cleanup on exit
 cleanup() {
-    echo "Cleaning up..."
-    docker-compose down
+    if [ "$DEBUG_MODE" = false ]; then
+        echo "Cleaning up..."
+        docker-compose down
+    else
+        echo "Debug mode: Keeping environment running"
+        echo "To clean up manually, run: docker-compose down"
+    fi
 }
 
 # Set up cleanup on script exit
@@ -35,20 +59,34 @@ trap cleanup EXIT
 
 # Start the test environment
 echo "Starting test environment..."
-docker-compose up -d schema-registry-source schema-registry-dest
+docker-compose up -d schema-registry-source schema-registry-dest akhq
 
 # Wait for both schema registries to be ready
 echo "Waiting for schema registries to be ready..."
 if ! wait_for_service "http://localhost:38081" "schema-registry-source"; then
     echo "Source schema registry failed to start"
     docker-compose logs schema-registry-source
-    exit 1
+    if [ "$DEBUG_MODE" = false ]; then
+        exit 1
+    fi
 fi
 
 if ! wait_for_service "http://localhost:38082" "schema-registry-dest"; then
     echo "Destination schema registry failed to start"
     docker-compose logs schema-registry-dest
-    exit 1
+    if [ "$DEBUG_MODE" = false ]; then
+        exit 1
+    fi
+fi
+
+# Wait for AKHQ to be ready
+echo "Waiting for AKHQ to be ready..."
+if ! wait_for_service "http://localhost:38090" "akhq"; then
+    echo "AKHQ failed to start"
+    docker-compose logs akhq
+    if [ "$DEBUG_MODE" = false ]; then
+        exit 1
+    fi
 fi
 
 # Additional wait to ensure Kafka is fully ready
@@ -71,7 +109,9 @@ for i in $(seq 1 $max_retries); do
     fi
     if [ $i -eq $max_retries ]; then
         echo "Destination registry cleanup failed"
-        exit 1
+        if [ "$DEBUG_MODE" = false ]; then
+            exit 1
+        fi
     fi
     echo "Waiting for destination registry cleanup... ($i/$max_retries)"
     sleep $retry_interval
@@ -91,7 +131,9 @@ for i in $(seq 1 $max_retries); do
     fi
     if [ $i -eq $max_retries ]; then
         echo "Source registry population failed"
-        exit 1
+        if [ "$DEBUG_MODE" = false ]; then
+            exit 1
+        fi
     fi
     echo "Waiting for source registry population... ($i/$max_retries)"
     sleep $retry_interval
@@ -99,6 +141,16 @@ done
 
 # Run migration tests
 echo "Running migration tests..."
-python test_migration.py
-
-echo "All tests completed successfully!" 
+if python test_migration.py; then
+    echo "All tests completed successfully!"
+else
+    if [ "$DEBUG_MODE" = true ]; then
+        echo "Tests failed but debug mode is enabled. Environment is still running."
+        echo "You can inspect the environment and run tests manually."
+        echo "To clean up, run: docker-compose down"
+        exit 1
+    else
+        echo "Tests failed"
+        exit 1
+    fi
+fi 

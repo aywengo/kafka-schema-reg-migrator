@@ -391,6 +391,309 @@ def verify_migration_with_dest_context(source_url: str, dest_url: str) -> bool:
         logger.error(f"Verification of migration with destination context failed: {e}")
         return False
 
+def run_migration_with_different_contexts() -> bool:
+    """Run the migration script with different source and destination contexts."""
+    env = os.environ.copy()
+    env.update({
+        'SOURCE_SCHEMA_REGISTRY_URL': 'http://localhost:38081',
+        'DEST_SCHEMA_REGISTRY_URL': 'http://localhost:38082',
+        'ENABLE_MIGRATION': 'true',
+        'DRY_RUN': 'false',
+        'DEST_IMPORT_MODE': 'false',
+        'SOURCE_CONTEXT': 'source-context',
+        'DEST_CONTEXT': 'dest-context'
+    })
+    
+    # First ensure both contexts exist
+    session = create_session_with_retries()
+    try:
+        # Try to set mode to IMPORT, but don't fail if not supported
+        try:
+            response = session.put(
+                'http://localhost:38081/mode',
+                json={'mode': 'IMPORT'}
+            )
+            response.raise_for_status()
+            logger.info("Set mode to IMPORT for source registry")
+        except requests.exceptions.RequestException as e:
+            logger.info(f"Mode endpoint not supported on source registry: {e}")
+        
+        try:
+            response = session.put(
+                'http://localhost:38082/mode',
+                json={'mode': 'IMPORT'}
+            )
+            response.raise_for_status()
+            logger.info("Set mode to IMPORT for destination registry")
+        except requests.exceptions.RequestException as e:
+            logger.info(f"Mode endpoint not supported on destination registry: {e}")
+        
+        # Create source context
+        try:
+            response = session.put(
+                'http://localhost:38081/config',
+                json={'context': 'source-context'}
+            )
+            if response.status_code == 409:  # Context already exists
+                logger.info("Context 'source-context' already exists")
+            else:
+                response.raise_for_status()
+                logger.info("Created context 'source-context'")
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to create source context: {e}")
+            return False
+        
+        # Create destination context
+        try:
+            response = session.put(
+                'http://localhost:38082/config',
+                json={'context': 'dest-context'}
+            )
+            if response.status_code == 409:  # Context already exists
+                logger.info("Context 'dest-context' already exists")
+            else:
+                response.raise_for_status()
+                logger.info("Created context 'dest-context'")
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to create destination context: {e}")
+            return False
+            
+        # Wait for contexts to be ready
+        max_retries = 5
+        retry_interval = 2
+        for i in range(max_retries):
+            try:
+                # Try to get subjects in both contexts
+                response = session.get('http://localhost:38081/contexts/source-context/subjects')
+                response.raise_for_status()
+                response = session.get('http://localhost:38082/contexts/dest-context/subjects')
+                response.raise_for_status()
+                logger.info("Both contexts are ready")
+                break
+            except requests.exceptions.RequestException as e:
+                if i < max_retries - 1:
+                    logger.info(f"Contexts not ready yet, retrying... ({i+1}/{max_retries})")
+                    time.sleep(retry_interval)
+                else:
+                    logger.error(f"Context verification failed after {max_retries} attempts")
+                    return False
+            
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Failed to create contexts: {e}")
+        return False
+    
+    return False
+
+    try:
+        result = subprocess.run(
+            ['python', '../schema_registry_migrator.py'],
+            env=env,
+            check=True,
+            capture_output=True,
+            text=True
+        )
+        logger.info(result.stdout)
+        return True
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Migration with different contexts failed with exit code {e.returncode}")
+        logger.error(f"Output: {e.stdout}")
+        logger.error(f"Error: {e.stderr}")
+        return False
+
+def run_migration_with_same_cluster_contexts() -> bool:
+    """Run the migration script with different contexts but same cluster."""
+    env = os.environ.copy()
+    env.update({
+        'SOURCE_SCHEMA_REGISTRY_URL': 'http://localhost:38081',
+        'DEST_SCHEMA_REGISTRY_URL': 'http://localhost:38081',  # Same cluster
+        'ENABLE_MIGRATION': 'true',
+        'DRY_RUN': 'false',
+        'DEST_IMPORT_MODE': 'false',
+        'SOURCE_CONTEXT': 'source-context',
+        'DEST_CONTEXT': 'dest-context'
+    })
+    
+    # First ensure both contexts exist
+    session = create_session_with_retries()
+    try:
+        # Try to set mode to IMPORT, but don't fail if not supported
+        try:
+            response = session.put(
+                'http://localhost:38081/mode',
+                json={'mode': 'IMPORT'}
+            )
+            response.raise_for_status()
+            logger.info("Set mode to IMPORT for registry")
+        except requests.exceptions.RequestException as e:
+            logger.info(f"Mode endpoint not supported: {e}")
+        
+        # Create source context
+        try:
+            response = session.put(
+                'http://localhost:38081/config',
+                json={'context': 'source-context'}
+            )
+            if response.status_code == 409:  # Context already exists
+                logger.info("Context 'source-context' already exists")
+            else:
+                response.raise_for_status()
+                logger.info("Created context 'source-context'")
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to create source context: {e}")
+            return False
+        
+        # Create destination context
+        try:
+            response = session.put(
+                'http://localhost:38081/config',
+                json={'context': 'dest-context'}
+            )
+            if response.status_code == 409:  # Context already exists
+                logger.info("Context 'dest-context' already exists")
+            else:
+                response.raise_for_status()
+                logger.info("Created context 'dest-context'")
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to create destination context: {e}")
+            return False
+            
+        # Wait for contexts to be ready
+        max_retries = 5
+        retry_interval = 2
+        for i in range(max_retries):
+            try:
+                # Try to get subjects in both contexts
+                response = session.get('http://localhost:38081/contexts/source-context/subjects')
+                response.raise_for_status()
+                response = session.get('http://localhost:38081/contexts/dest-context/subjects')
+                response.raise_for_status()
+                logger.info("Both contexts are ready")
+                break
+            except requests.exceptions.RequestException as e:
+                if i < max_retries - 1:
+                    logger.info(f"Contexts not ready yet, retrying... ({i+1}/{max_retries})")
+                    time.sleep(retry_interval)
+                else:
+                    logger.error(f"Context verification failed after {max_retries} attempts")
+                    return False
+            
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Failed to create contexts: {e}")
+        return False
+    
+    try:
+        result = subprocess.run(
+            ['python', '../schema_registry_migrator.py'],
+            env=env,
+            check=True,
+            capture_output=True,
+            text=True
+        )
+        logger.info(result.stdout)
+        return True
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Migration with same cluster contexts failed with exit code {e.returncode}")
+        logger.error(f"Output: {e.stdout}")
+        logger.error(f"Error: {e.stderr}")
+        return False
+
+def verify_migration_with_different_contexts(source_url: str, dest_url: str) -> bool:
+    """Verify that schemas were migrated correctly between different contexts."""
+    try:
+        # Get schemas from source context
+        session = create_session_with_retries()
+        source_context_url = f"{source_url}/contexts/source-context"
+        dest_context_url = f"{dest_url}/contexts/dest-context"
+        
+        # Get subjects in source context
+        try:
+            response = session.get(f"{source_context_url}/subjects")
+            response.raise_for_status()
+            source_subjects = response.json()
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to get subjects from source context: {e}")
+            return False
+        
+        # Get subjects in destination context
+        try:
+            response = session.get(f"{dest_context_url}/subjects")
+            response.raise_for_status()
+            dest_subjects = response.json()
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to get subjects from destination context: {e}")
+            return False
+        
+        # Remove context prefixes for comparison
+        source_schemas = {}
+        for subject in source_subjects:
+            base_subject = subject.replace(':.source-context:', '')
+            source_schemas[base_subject] = []
+            try:
+                versions_response = session.get(f"{source_context_url}/subjects/{subject}/versions")
+                versions_response.raise_for_status()
+                versions = versions_response.json()
+                
+                for version in versions:
+                    schema_response = session.get(f"{source_context_url}/subjects/{subject}/versions/{version}")
+                    schema_response.raise_for_status()
+                    schema_info = schema_response.json()
+                    source_schemas[base_subject].append({
+                        'version': version,
+                        'id': schema_info.get('id'),
+                        'schema': schema_info.get('schema')
+                    })
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Failed to get schema information for subject {subject}: {e}")
+                return False
+        
+        dest_schemas = {}
+        for subject in dest_subjects:
+            base_subject = subject.replace(':.dest-context:', '')
+            dest_schemas[base_subject] = []
+            try:
+                versions_response = session.get(f"{dest_context_url}/subjects/{subject}/versions")
+                versions_response.raise_for_status()
+                versions = versions_response.json()
+                
+                for version in versions:
+                    schema_response = session.get(f"{dest_context_url}/subjects/{subject}/versions/{version}")
+                    schema_response.raise_for_status()
+                    schema_info = schema_response.json()
+                    dest_schemas[base_subject].append({
+                        'version': version,
+                        'id': schema_info.get('id'),
+                        'schema': schema_info.get('schema')
+                    })
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Failed to get schema information for subject {subject}: {e}")
+                return False
+        
+        # Check if all subjects were migrated
+        if set(source_schemas.keys()) != set(dest_schemas.keys()):
+            logger.error(f"Not all subjects were migrated between contexts. Source: {set(source_schemas.keys())}, Dest: {set(dest_schemas.keys())}")
+            return False
+        
+        # Check each subject's versions
+        for subject, source_versions in source_schemas.items():
+            dest_versions = dest_schemas[subject]
+            
+            # Check if all versions were migrated
+            if len(source_versions) != len(dest_versions):
+                logger.error(f"Subject {subject} has different number of versions between contexts. Source: {len(source_versions)}, Dest: {len(dest_versions)}")
+                return False
+            
+            # Check each version
+            for source_version, dest_version in zip(source_versions, dest_versions):
+                # Schema content should be the same
+                if source_version['schema'] != dest_version['schema']:
+                    logger.error(f"Subject {subject} version {source_version['version']} has different schema between contexts")
+                    return False
+        
+        return True
+    except Exception as e:
+        logger.error(f"Verification of migration between contexts failed: {e}")
+        return False
+
 def test_auth_validation():
     """Test username/password validation."""
     # Test case 1: Both username and password provided
@@ -511,6 +814,48 @@ def main():
     if not verify_migration_with_dest_context('http://localhost:38081', 'http://localhost:38082'):
         logger.error("Migration with destination context verification failed")
         return 1
+    
+    logger.info("Migration with destination context test passed")
+    
+    # Test 6: Migration with different contexts
+    logger.info("Test 6: Migration with different contexts")
+    try:
+        # Clean up both contexts
+        cleanup_destination('source-context')
+        cleanup_destination('dest-context')
+    except Exception as e:
+        logger.error(f"Failed to clean up contexts: {e}")
+        return 1
+
+    if not run_migration_with_different_contexts():
+        logger.error("Migration with different contexts test failed")
+        return 1
+    
+    if not verify_migration_with_different_contexts('http://localhost:38081', 'http://localhost:38082'):
+        logger.error("Migration with different contexts verification failed")
+        return 1
+    
+    logger.info("Migration with different contexts test passed")
+    
+    # Test 7: Migration with same cluster contexts
+    logger.info("Test 7: Migration with same cluster contexts")
+    try:
+        # Clean up both contexts
+        cleanup_destination('source-context')
+        cleanup_destination('dest-context')
+    except Exception as e:
+        logger.error(f"Failed to clean up contexts: {e}")
+        return 1
+    
+    if not run_migration_with_same_cluster_contexts():
+        logger.error("Migration with same cluster contexts test failed")
+        return 1
+    
+    if not verify_migration_with_different_contexts('http://localhost:38081', 'http://localhost:38081'):
+        logger.error("Migration with same cluster contexts verification failed")
+        return 1
+    
+    logger.info("Migration with same cluster contexts test passed")
     
     logger.info("All tests passed successfully")
     return 0

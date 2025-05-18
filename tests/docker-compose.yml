@@ -69,6 +69,8 @@ services:
 
   schema-registry-source:
     image: confluentinc/cp-schema-registry:7.5.0
+    hostname: schema-registry-source
+    container_name: schema-registry-source
     depends_on:
       kafka-source:
         condition: service_healthy
@@ -89,6 +91,8 @@ services:
 
   schema-registry-dest:
     image: confluentinc/cp-schema-registry:7.5.0
+    hostname: schema-registry-dest
+    container_name: schema-registry-dest
     depends_on:
       kafka-dest:
         condition: service_healthy
@@ -102,6 +106,36 @@ services:
       SCHEMA_REGISTRY_DELETE_VERSION_ENABLED: "true"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8082/subjects"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  akhq:
+    image: tchiotludo/akhq:latest
+    depends_on:
+      schema-registry-source:
+        condition: service_healthy
+      schema-registry-dest:
+        condition: service_healthy
+    ports:
+      - "38090:8080"
+    environment:
+      AKHQ_CONFIGURATION: |
+        akhq:
+          connections:
+            docker-source:
+              properties:
+                bootstrap.servers: "kafka-source:9092"
+              schema-registry:
+                url: "http://schema-registry-source:8081"
+            docker-dest:
+              properties:
+                bootstrap.servers: "kafka-dest:9093"
+              schema-registry:
+                url: "http://schema-registry-dest:8082"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080"]
       interval: 10s
       timeout: 5s
       retries: 10
