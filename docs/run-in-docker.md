@@ -1,4 +1,4 @@
-# Docker Environment Variables
+# Run in Docker Container
 
 This document describes how to pass environment variables to the Kafka Schema Registry Migrator Docker container.
 
@@ -20,6 +20,10 @@ docker run -e SOURCE_SCHEMA_REGISTRY_URL=http://source:8081 \
 | `SOURCE_SCHEMA_REGISTRY_URL` | URL of the source Schema Registry | Yes | - |
 | `DEST_SCHEMA_REGISTRY_URL` | URL of the destination Schema Registry | Yes | - |
 | `ENABLE_MIGRATION` | Enable schema migration | Yes | - |
+| `SOURCE_USERNAME` | Username for source Schema Registry authentication | No | - |
+| `SOURCE_PASSWORD` | Password for source Schema Registry authentication | No | - |
+| `DEST_USERNAME` | Username for destination Schema Registry authentication | No | - |
+| `DEST_PASSWORD` | Password for destination Schema Registry authentication | No | - |
 | `SOURCE_CONTEXT` | Context name for source Schema Registry | No | - |
 | `DEST_CONTEXT` | Context name for destination Schema Registry | No | - |
 | `LOG_LEVEL` | Logging level (DEBUG, INFO, WARNING, ERROR) | No | INFO |
@@ -33,6 +37,10 @@ For multiple environment variables, you can use an environment file:
 SOURCE_SCHEMA_REGISTRY_URL=http://source:8081
 DEST_SCHEMA_REGISTRY_URL=http://dest:8081
 ENABLE_MIGRATION=true
+SOURCE_USERNAME=source_user
+SOURCE_PASSWORD=source_pass
+DEST_USERNAME=dest_user
+DEST_PASSWORD=dest_pass
 SOURCE_CONTEXT=source-context
 DEST_CONTEXT=dest-context
 LOG_LEVEL=DEBUG
@@ -54,6 +62,10 @@ services:
       - SOURCE_SCHEMA_REGISTRY_URL=http://source:8081
       - DEST_SCHEMA_REGISTRY_URL=http://dest:8081
       - ENABLE_MIGRATION=true
+      - SOURCE_USERNAME=source_user
+      - SOURCE_PASSWORD=source_pass
+      - DEST_USERNAME=dest_user
+      - DEST_PASSWORD=dest_pass
       - SOURCE_CONTEXT=source-context
       - DEST_CONTEXT=dest-context
       - LOG_LEVEL=DEBUG
