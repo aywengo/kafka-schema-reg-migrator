@@ -153,19 +153,24 @@ def run_comparison() -> bool:
         logger.error(f"Error: {e.stderr}")
         return False
 
-def cleanup_destination():
+def cleanup_destination(context: str = None):
     """Clean up the destination registry."""
     session = create_session_with_retries()
     try:
+        # Construct the base URL
+        base_url = 'http://localhost:38082'
+        if context:
+            base_url = f"{base_url}/contexts/{context}"
+        
         # First get all subjects
-        response = session.get('http://localhost:38082/subjects')
+        response = session.get(f"{base_url}/subjects")
         response.raise_for_status()
         subjects = response.json()
         
         # Delete each subject individually
         for subject in subjects:
             try:
-                delete_response = session.delete(f'http://localhost:38082/subjects/{subject}')
+                delete_response = session.delete(f"{base_url}/subjects/{subject}")
                 delete_response.raise_for_status()
                 logger.info(f"Successfully deleted subject {subject}")
             except requests.exceptions.RequestException as e:
@@ -241,6 +246,148 @@ def populate_source():
         logger.error(f"Error: {e.stderr}")
         return False
 
+def run_migration_with_dest_context() -> bool:
+    """Run the migration script with destination context but no source context."""
+    env = os.environ.copy()
+    env.update({
+        'SOURCE_SCHEMA_REGISTRY_URL': 'http://localhost:38081',
+        'DEST_SCHEMA_REGISTRY_URL': 'http://localhost:38082',
+        'ENABLE_MIGRATION': 'true',
+        'DRY_RUN': 'false',
+        'DEST_IMPORT_MODE': 'false',
+        'DEST_CONTEXT': 'test-context'  # Set destination context
+    })
+    
+    # First ensure the context exists
+    session = create_session_with_retries()
+    try:
+        # For Confluent Schema Registry 7.5.0, we need to use the mode endpoint
+        response = session.put(
+            'http://localhost:38082/mode',
+            json={'mode': 'IMPORT'}
+        )
+        response.raise_for_status()
+        
+        # Now create the context using the correct endpoint
+        response = session.put(
+            'http://localhost:38082/config',
+            json={'context': 'test-context', 'mode': 'IMPORT'}
+        )
+        if response.status_code == 409:  # Context already exists
+            logger.info("Context 'test-context' already exists")
+        else:
+            response.raise_for_status()
+            logger.info("Created context 'test-context'")
+            
+        # Wait for context to be ready by trying to use it
+        max_retries = 5
+        retry_interval = 2
+        for i in range(max_retries):
+            try:
+                # Try to get subjects in the context
+                response = session.get('http://localhost:38082/contexts/test-context/subjects')
+                response.raise_for_status()
+                logger.info("Context 'test-context' is ready")
+                break
+            except requests.exceptions.RequestException as e:
+                if i < max_retries - 1:
+                    logger.info(f"Context not ready yet, retrying... ({i+1}/{max_retries})")
+                    time.sleep(retry_interval)
+                else:
+                    logger.error(f"Context verification failed after {max_retries} attempts")
+                    return False
+            
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Failed to create context: {e}")
+        return False
+    
+    try:
+        result = subprocess.run(
+            ['python', '../schema_registry_migrator.py'],
+            env=env,
+            check=True,
+            capture_output=True,
+            text=True
+        )
+        logger.info(result.stdout)
+        return True
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Migration with destination context failed with exit code {e.returncode}")
+        logger.error(f"Output: {e.stdout}")
+        logger.error(f"Error: {e.stderr}")
+        return False
+
+def verify_migration_with_dest_context(source_url: str, dest_url: str) -> bool:
+    """Verify that schemas were migrated correctly with destination context."""
+    try:
+        # Get schemas from source (no context)
+        source_schemas = get_schemas(source_url)
+        
+        # Get schemas from destination with context
+        session = create_session_with_retries()
+        context_url = f"{dest_url}/contexts/test-context"
+        
+        # Get subjects in the context
+        try:
+            response = session.get(f"{context_url}/subjects")
+            response.raise_for_status()
+            subjects = response.json()
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to get subjects from context: {e}")
+            return False
+        
+        dest_schemas = {}
+        for subject in subjects:
+            try:
+                # Get versions for this subject
+                versions_response = session.get(f"{context_url}/subjects/{subject}/versions")
+                versions_response.raise_for_status()
+                versions = versions_response.json()
+                
+                # Remove context prefix from subject name for comparison
+                base_subject = subject.replace(':.test-context:', '')
+                dest_schemas[base_subject] = []
+                
+                for version in versions:
+                    # Get schema for this version
+                    schema_response = session.get(f"{context_url}/subjects/{subject}/versions/{version}")
+                    schema_response.raise_for_status()
+                    schema_info = schema_response.json()
+                    dest_schemas[base_subject].append({
+                        'version': version,
+                        'id': schema_info.get('id'),
+                        'schema': schema_info.get('schema')
+                    })
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Failed to get schema information for subject {subject}: {e}")
+                return False
+        
+        # Check if all subjects were migrated
+        if set(source_schemas.keys()) != set(dest_schemas.keys()):
+            logger.error(f"Not all subjects were migrated to destination context. Source: {set(source_schemas.keys())}, Dest: {set(dest_schemas.keys())}")
+            return False
+        
+        # Check each subject's versions
+        for subject, source_versions in source_schemas.items():
+            dest_versions = dest_schemas[subject]
+            
+            # Check if all versions were migrated
+            if len(source_versions) != len(dest_versions):
+                logger.error(f"Subject {subject} has different number of versions in destination context. Source: {len(source_versions)}, Dest: {len(dest_versions)}")
+                return False
+            
+            # Check each version
+            for source_version, dest_version in zip(source_versions, dest_versions):
+                # Schema content should be the same
+                if source_version['schema'] != dest_version['schema']:
+                    logger.error(f"Subject {subject} version {source_version['version']} has different schema in destination context")
+                    return False
+        
+        return True
+    except Exception as e:
+        logger.error(f"Verification of migration with destination context failed: {e}")
+        return False
+
 def main():
     # Test 1: Comparison only
     logger.info("Test 1: Comparison only")
@@ -298,6 +445,24 @@ def main():
         return 1
     
     logger.info("Import mode migration test passed")
+    
+    # Test 5: Migration with destination context
+    logger.info("Test 5: Migration with destination context")
+    try:
+        # Clean up both the context and the default context
+        cleanup_destination('test-context')
+        cleanup_destination()  # Clean up default context as well
+    except Exception as e:
+        logger.error(f"Failed to clean up destination registry: {e}")
+        return 1
+    
+    if not run_migration_with_dest_context():
+        logger.error("Migration with destination context test failed")
+        return 1
+    
+    if not verify_migration_with_dest_context('http://localhost:38081', 'http://localhost:38082'):
+        logger.error("Migration with destination context verification failed")
+        return 1
     
     logger.info("All tests passed successfully")
     return 0

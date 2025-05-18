@@ -147,6 +147,14 @@ If migration is enabled (`ENABLE_MIGRATION=true`), it will also show:
 - **If you want to only clean up (without migrating), set `DRY_RUN=true` as well.**
 - Use with caution as it will delete all existing schemas in the destination
 
+### Context Support
+- Set `SOURCE_CONTEXT` and/or `DEST_CONTEXT` to specify contexts
+- Supports migrating schemas between different contexts
+- Can migrate from default context to a specific context
+- Can migrate from one context to another
+- Context names are case-sensitive
+- When using contexts, subject names in the destination will be prefixed with the context name (e.g., `:.context-name:subject-name`)
+
 ## Safety Features
 
 - Dry run mode by default
@@ -156,6 +164,7 @@ If migration is enabled (`ENABLE_MIGRATION=true`), it will also show:
 - Detailed logging of all operations
 - Optional import mode to preserve schema IDs
 - Optional cleanup mode for fresh migration
+- Context-aware schema migration
 
 ## Testing
 
@@ -200,6 +209,7 @@ The test suite will:
    - **Cleanup test**: Runs the migration script with `CLEANUP_DESTINATION=true` and `DRY_RUN=true` to ensure the destination registry is empty after cleanup (no migration performed).
    - **Normal migration test**: Migrates schemas from source to destination and verifies the result.
    - **Import mode migration test**: Migrates schemas in import mode and verifies ID preservation.
+   - **Context migration test**: Migrates schemas from default context to a specific context and verifies the result.
 4. Clean up the environment
 
 ### Test Cases
@@ -209,6 +219,7 @@ The test suite includes:
 - Cleanup-only test (no migration, just cleanup)
 - Normal migration test
 - Import mode migration test
+- Context migration test
 
 ### Test Schemas
 
@@ -222,4 +233,5 @@ This provides coverage for:
 - Schema evolution
 - Optional fields
 - Array types
-- Default values 
+- Default values
+- Context-aware schema migration 
