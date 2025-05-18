@@ -40,6 +40,25 @@ pip install -r requirements.txt
 docker build -t kafka-schema-reg-migrator .
 ```
 
+### Using Docker
+
+```bash
+docker pull aywengo/kafka-schema-reg-migrator:latest
+```
+
+### From Source
+
+1. Clone the repository:
+```bash
+git clone https://github.com/aywengo/kafka-schema-reg-migrator.git
+cd kafka-schema-reg-migrator
+```
+
+2. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
+
 ## Configuration
 
 Create a `.env` file with the following variables:
@@ -97,6 +116,21 @@ To run tests in Docker:
 ```bash
 docker run -it --env-file .env kafka-schema-reg-migrator bash -c "cd tests && ./run_tests.sh"
 ```
+
+### Environment Variables
+
+The following environment variables are required:
+
+- `SOURCE_SCHEMA_REGISTRY_URL`: URL of the source Schema Registry
+- `DEST_SCHEMA_REGISTRY_URL`: URL of the destination Schema Registry
+- `ENABLE_MIGRATION`: Set to `true` to enable migration
+
+Optional variables:
+- `SOURCE_CONTEXT`: Context name for source Schema Registry
+- `DEST_CONTEXT`: Context name for destination Schema Registry
+- `LOG_LEVEL`: Logging level (DEBUG, INFO, WARNING, ERROR)
+
+For detailed information about running the tool in Docker, see [Run in Docker](docs/run-in-docker.md).
 
 ## Output
 
@@ -168,7 +202,7 @@ If migration is enabled (`ENABLE_MIGRATION=true`), it will also show:
 
 ## Testing
 
-The project includes a complete test environment that runs two independent Schema Registries using Docker. The test suite verifies both normal migration and import mode functionality.
+The project includes a complete test environment that runs two independent Schema Registries using Docker. For detailed information about running tests, see [Running Tests](docs/running-tests.md).
 
 ### Test Environment
 
@@ -234,4 +268,16 @@ This provides coverage for:
 - Optional fields
 - Array types
 - Default values
-- Context-aware schema migration 
+- Context-aware schema migration
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Commit your changes
+4. Push to the branch
+5. Create a Pull Request
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details. 
