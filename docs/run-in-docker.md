@@ -20,6 +20,7 @@ docker run -e SOURCE_SCHEMA_REGISTRY_URL=http://source:8081 \
 | `SOURCE_SCHEMA_REGISTRY_URL` | URL of the source Schema Registry | Yes | - |
 | `DEST_SCHEMA_REGISTRY_URL` | URL of the destination Schema Registry | Yes | - |
 | `ENABLE_MIGRATION` | Enable schema migration | Yes | - |
+| `DRY_RUN` | Run in dry-run mode (no actual changes) | No | true |
 | `SOURCE_USERNAME` | Username for source Schema Registry authentication | No | - |
 | `SOURCE_PASSWORD` | Password for source Schema Registry authentication | No | - |
 | `DEST_USERNAME` | Username for destination Schema Registry authentication | No | - |
@@ -37,6 +38,7 @@ For multiple environment variables, you can use an environment file:
 SOURCE_SCHEMA_REGISTRY_URL=http://source:8081
 DEST_SCHEMA_REGISTRY_URL=http://dest:8081
 ENABLE_MIGRATION=true
+DRY_RUN=true
 SOURCE_USERNAME=source_user
 SOURCE_PASSWORD=source_pass
 DEST_USERNAME=dest_user
@@ -62,6 +64,7 @@ services:
       - SOURCE_SCHEMA_REGISTRY_URL=http://source:8081
       - DEST_SCHEMA_REGISTRY_URL=http://dest:8081
       - ENABLE_MIGRATION=true
+      - DRY_RUN=true
       - SOURCE_USERNAME=source_user
       - SOURCE_PASSWORD=source_pass
       - DEST_USERNAME=dest_user

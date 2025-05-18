@@ -31,24 +31,6 @@ cd tests
 ./run_tests.sh
 ```
 
-## Running Tests in Docker
-
-### 1. Build the Docker Image
-
-```bash
-docker build -t kafka-schema-reg-migrator .
-```
-
-### 2. Run Tests in Container
-
-```bash
-docker run -it --rm \
-  --network host \
-  -v $(pwd):/app \
-  kafka-schema-reg-migrator \
-  bash -c "cd tests && ./run_tests.sh"
-```
-
 ## Test Cases
 
 The test suite includes the following test cases:
@@ -103,7 +85,7 @@ This provides coverage for:
    - Try using `docker compose` instead of `docker-compose`
 
 2. **Port Conflicts**
-   - Check if ports 8081 and 8082 are available
+   - Check if ports 38081 and 38082 are available
    - Stop any running Schema Registry instances
 
 3. **Test Failures**
