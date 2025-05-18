@@ -1,4 +1,4 @@
-name: Build and Test
+name: Build
 
 on:
   push:
@@ -17,31 +17,22 @@ jobs:
 
       - name: Build Docker image
         uses: docker/build-push-action@v5
-        with:
-          context: .
-          load: true
-          tags: kafka-schema-reg-migrator:test
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
 
-        run: |
-          # Make test script executable
-          chmod +x tests/run_tests.sh
-          
-          # Run tests with Docker Compose
-          cd tests
-          docker compose up -d
-          
-          # Wait for services to be ready
-          echo "Waiting for services to be ready..."
-          sleep 30
-          
-          # Run the tests
-          docker run --rm \
-            --network tests_default \
-            -v $(pwd):/app/tests \
-            kafka-schema-reg-migrator:test \
-            bash -c "cd tests && ./run_tests.sh"
-          
-          # Clean up
-          docker compose down 
+      - name: Make test script executable
+        run: chmod +x tests/run_tests.sh
+
+      - name: Run tests with Docker Compose
+        run: cd tests && docker compose up -d
+
+      - name: Wait for services to be ready
+        run: echo "Waiting for services to be ready..." && sleep 30
+
+      - name: Run the tests
+        run: docker run --rm \
+          --network tests_default \
+          -v $(pwd):/app/tests \
+          kafka-schema-reg-migrator:test \
+          bash -c "cd tests && ./run_tests.sh"
+
+      - name: Clean up
+        run: docker compose down 
