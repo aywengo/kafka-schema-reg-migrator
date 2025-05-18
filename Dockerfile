@@ -18,6 +18,3 @@ ENV PYTHONUNBUFFERED=1
 
 # Default command for running the application
 ENTRYPOINT ["python", "schema_registry_migrator.py"]
-
-# Command for running tests
-CMD ["bash", "-c", "cd tests && ./run_tests.sh"] 

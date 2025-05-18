@@ -24,7 +24,6 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Run tests
         run: |
           # Make test script executable
           chmod +x tests/run_tests.sh
