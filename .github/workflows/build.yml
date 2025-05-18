@@ -15,6 +15,12 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Install Docker Compose
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y docker-compose-plugin
+          docker compose version
+
       - name: Build Docker image
         uses: docker/build-push-action@v5
         with:
@@ -31,7 +37,7 @@ jobs:
           
           # Run tests with Docker Compose
           cd tests
-          docker-compose up -d
+          docker compose up -d
           
           # Wait for services to be ready
           echo "Waiting for services to be ready..."
@@ -45,4 +51,4 @@ jobs:
             bash -c "cd tests && ./run_tests.sh"
           
           # Clean up
-          docker-compose down 
+          docker compose down 
