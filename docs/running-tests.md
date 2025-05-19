@@ -22,99 +22,126 @@ The test suite includes both integration tests and unit tests:
 
 ## Running Tests
 
-### Using pytest
+### Prerequisites
 
-To run all tests with pytest:
+1. Docker and Docker Compose installed
+2. Python 3.8+ installed
+3. Required Python packages installed:
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-```bash
-pytest tests/test_migration.py -v
-```
+### Running the Test Suite
 
-### Running Integration Tests Only
+1. Navigate to the tests directory:
+   ```bash
+   cd tests
+   ```
 
-To run only the integration tests:
+2. Run the test script:
+   ```bash
+   ./run_tests.sh
+   ```
 
-```bash
-python tests/test_migration.py
-```
+   For debugging:
+   ```bash
+   ./run_tests.sh --debug
+   ```
+
+### Test Components
+
+The test environment includes:
+
+1. **Kafka Clusters**:
+   - Source cluster (port 39092)
+   - Destination cluster (port 39093)
+
+2. **Schema Registries**:
+   - Source registry (port 38081)
+   - Destination registry (port 38082)
+
+3. **Schema Registry UIs**:
+   - Source UI (port 38091)
+   - Destination UI (port 38092)
+
+### Accessing the UIs
+
+You can access the Schema Registry UIs at:
+- Source UI: http://localhost:38091
+- Destination UI: http://localhost:38092
+
+These UIs provide a web interface to:
+- Browse and search schemas
+- View schema versions
+- Compare schema versions
+- Manage subjects and versions
+
+### Test Cases
+
+The test suite includes:
+
+1. Comparison-only test
+2. Cleanup test
+3. Normal migration test
+4. Import mode migration test
+5. Context migration test
+6. Same cluster context migration test
+7. Authentication validation test
+8. ID collision with cleanup test
+9. ID collision without cleanup test
+10. ID collision with cleanup and import mode test
+
+### Debugging
+
+If you need to debug the test environment:
+
+1. Run tests in debug mode:
+   ```bash
+   ./run_tests.sh --debug
+   ```
+
+2. This will:
+   - Keep the environment running after tests
+   - Show detailed logs
+   - Allow manual inspection of the environment
+
+3. To clean up manually:
+   ```bash
+   docker-compose down
+   ```
+
+### Troubleshooting
+
+If you encounter issues:
+
+1. Check if all services are running:
+   ```bash
+   docker-compose ps
+   ```
+
+2. View service logs:
+   ```bash
+   docker-compose logs
+   ```
+
+3. Check Schema Registry UIs:
+   - Source: http://localhost:38091
+   - Destination: http://localhost:38092
+
+4. Verify ports are not in use:
+   ```bash
+   lsof -i :38081,38082,38091,38092,39092,39093
+   ```
 
 ## Test Environment
 
 The test environment consists of:
-- Two independent Kafka clusters (source and destination)
-- Two Schema Registry instances
-- AKHQ for monitoring and management
-- Test schemas with different versions
-- Automated test scripts
-
-### Starting the Test Environment
-
-1. Make sure you have Docker and Docker Compose installed
-2. Make the test script executable:
-```bash
-chmod +x tests/run_tests.sh
-```
-
-3. Run the tests:
-```bash
-cd tests
-./run_tests.sh
-```
-
-## Test Cases
-
-### Integration Tests
-
-1. **Comparison-only test**:
-   - Compares source and destination registries
-   - No changes are made
-   - Verifies schema comparison functionality
-
-2. **Cleanup test**:
-   - Runs with `CLEANUP_DESTINATION=true` and `DRY_RUN=true`
-   - Verifies destination registry cleanup
-   - No migration is performed
-
-3. **Normal migration test**:
-   - Migrates schemas from source to destination
-   - Verifies schema content and versions
-   - Checks for proper migration order
-
-4. **Import mode migration test**:
-   - Migrates schemas with `DEST_IMPORT_MODE=true`
-   - Verifies schema ID preservation
-   - Checks for proper schema content
-
-5. **Context migration test**:
-   - Migrates schemas between different contexts
-   - Verifies context-aware schema handling
-   - Checks for proper context prefixes
-
-6. **Same cluster context migration test**:
-   - Migrates schemas between contexts in the same cluster
-   - Verifies proper context isolation
-   - Checks for schema content preservation
-
-### Unit Tests
-
-1. **Authentication validation**:
-   - Tests username/password validation
-   - Verifies proper error handling
-   - Checks authentication requirements
-
-2. **ID collision handling**:
-   - Tests with `CLEANUP_DESTINATION=true`:
-     - Verifies cleanup before migration
-     - Checks for proper collision logging
-     - Ensures migration proceeds
-   - Tests with `CLEANUP_DESTINATION=false`:
-     - Verifies migration stops on collision
-     - Checks for proper error reporting
-     - Ensures no changes are made
-   - Tests with import mode:
-     - Verifies proper header handling
-     - Checks for ID preservation
-     - Ensures schema content integrity
+- Source Kafka cluster (port 39092)
+- Destination Kafka cluster (port 39093)
+- Source Schema Registry (port 38081)
+- Destination Schema Registry (port 38082)
+- Source Schema Registry UI (port 38091)
+- Destination Schema Registry UI (port 38092)
 
 ## Test Schemas
 
@@ -130,38 +157,6 @@ This provides coverage for:
 - Array types
 - Default values
 - Context-aware schema migration
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Schema Registry not ready**:
-   - Check if the services are running: `docker-compose ps`
-   - Check service logs: `docker-compose logs schema-registry-source schema-registry-dest`
-   - Wait for services to be fully ready (usually 30-60 seconds)
-
-2. **Test failures**:
-   - Check the test logs for detailed error messages
-   - Verify environment variables are set correctly
-   - Ensure no other services are using the required ports
-
-3. **ID collision errors**:
-   - Check if `CLEANUP_DESTINATION` is set appropriately
-   - Verify schema IDs in both registries
-   - Consider using a different context if needed
-
-### Debug Mode
-
-To run tests in debug mode:
-
-```bash
-DEBUG=true ./run_tests.sh
-```
-
-This will:
-- Show more detailed logs
-- Display API responses
-- Provide additional debugging information
 
 ## Cleanup
 

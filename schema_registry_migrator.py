@@ -471,6 +471,46 @@ def main():
             
             migration_results = migrate_schemas(source_client, dest_client, dry_run=dry_run)
             display_migration_results(migration_results)
+
+            # Validate migration results
+            if not dry_run:
+                logger.info("\nValidating migration results...")
+                # Get updated schemas from both registries
+                source_schemas = source_client.get_all_schemas()
+                dest_schemas = dest_client.get_all_schemas()
+                
+                # Check for missing items
+                missing_items = []
+                for subject, versions in source_schemas.items():
+                    if subject not in dest_schemas:
+                        missing_items.append({
+                            'subject': subject,
+                            'reason': 'Subject not found in destination'
+                        })
+                        continue
+                    
+                    dest_versions = dest_schemas[subject]
+                    for version in versions:
+                        if not any(v['schema'] == version['schema'] for v in dest_versions):
+                            missing_items.append({
+                                'subject': subject,
+                                'version': version['version'],
+                                'reason': 'Schema version not found in destination'
+                            })
+                
+                if missing_items:
+                    logger.warning("\nWARNING: Some items from source are missing in destination:")
+                    for item in missing_items:
+                        if 'version' in item:
+                            logger.warning(f"Subject: {item['subject']}, Version: {item['version']} - {item['reason']}")
+                        else:
+                            logger.warning(f"Subject: {item['subject']} - {item['reason']}")
+                    logger.warning("\nTo resolve missing items, you can:")
+                    logger.warning("1. Run the migration again")
+                    logger.warning("2. Check the migration logs for any errors")
+                    logger.warning("3. Verify that the destination registry is accessible and has sufficient permissions")
+                else:
+                    logger.info("Validation successful: All items were migrated correctly")
         else:
             logger.info("\nMigration disabled. Set ENABLE_MIGRATION=true to enable migration.")
 

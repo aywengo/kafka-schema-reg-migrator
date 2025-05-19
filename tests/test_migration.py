@@ -693,359 +693,198 @@ def verify_migration_with_different_contexts(source_url: str, dest_url: str) -> 
         logger.error(f"Verification of migration between contexts failed: {e}")
         return False
 
-def test_auth_validation():
-    """Test username/password validation."""
-    # Test case 1: Both username and password provided
+def run_import_mode_migration() -> bool:
+    """Run the migration script in import mode."""
+    env = os.environ.copy()
+    env.update({
+        'SOURCE_SCHEMA_REGISTRY_URL': 'http://localhost:38081',
+        'DEST_SCHEMA_REGISTRY_URL': 'http://localhost:38082',
+        'ENABLE_MIGRATION': 'true',
+        'DRY_RUN': 'false',
+        'DEST_IMPORT_MODE': 'true',
+        'CLEANUP_DESTINATION': 'true'  # Need to clean up for import mode to work
+    })
+    
     try:
+        result = subprocess.run(
+            ['python', '../schema_registry_migrator.py'],
+            env=env,
+            check=True,
+            capture_output=True,
+            text=True
+        )
+        logger.info(result.stdout)
+        return True
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Import mode migration failed with exit code {e.returncode}")
+        logger.error(f"Output: {e.stdout}")
+        logger.error(f"Error: {e.stderr}")
+        return False
+
+def run_authentication_validation() -> bool:
+    """Run authentication validation tests."""
+    try:
+        # Test case 1: Both username and password provided
         client = SchemaRegistryClient(
             url='http://localhost:38081',
             username='test_user',
             password='test_pass'
         )
-        assert client.auth == ('test_user', 'test_pass')
-    except ValueError as e:
-        assert False, f"Should not raise ValueError: {e}"
+        if client.auth != ('test_user', 'test_pass'):
+            logger.error("Auth validation failed: username/password not set correctly")
+            return False
 
-    # Test case 2: Neither username nor password provided
-    try:
+        # Test case 2: Neither username nor password provided
         client = SchemaRegistryClient(url='http://localhost:38081')
-        assert client.auth is None
-    except ValueError as e:
-        assert False, f"Should not raise ValueError: {e}"
+        if client.auth is not None:
+            logger.error("Auth validation failed: auth should be None when no credentials provided")
+            return False
 
-    # Test case 3: Only username provided
-    try:
-        SchemaRegistryClient(
-            url='http://localhost:38081',
-            username='test_user'
-        )
-        assert False, "Should raise ValueError"
-    except ValueError as e:
-        assert str(e) == "Both username and password must be provided, or neither"
+        # Test case 3: Only username provided
+        try:
+            SchemaRegistryClient(
+                url='http://localhost:38081',
+                username='test_user'
+            )
+            logger.error("Auth validation failed: should raise ValueError when only username provided")
+            return False
+        except ValueError as e:
+            if str(e) != "Both username and password must be provided, or neither":
+                logger.error(f"Auth validation failed: unexpected error message: {e}")
+                return False
 
-    # Test case 4: Only password provided
-    try:
-        SchemaRegistryClient(
-            url='http://localhost:38081',
-            password='test_pass'
-        )
-        assert False, "Should raise ValueError"
-    except ValueError as e:
-        assert str(e) == "Both username and password must be provided, or neither"
+        # Test case 4: Only password provided
+        try:
+            SchemaRegistryClient(
+                url='http://localhost:38081',
+                password='test_pass'
+            )
+            logger.error("Auth validation failed: should raise ValueError when only password provided")
+            return False
+        except ValueError as e:
+            if str(e) != "Both username and password must be provided, or neither":
+                logger.error(f"Auth validation failed: unexpected error message: {e}")
+                return False
 
-def test_id_collision_with_cleanup(mocker):
-    """Test ID collision handling when CLEANUP_DESTINATION is true."""
-    # Mock environment variables
-    mocker.patch.dict(os.environ, {
-        'SOURCE_SCHEMA_REGISTRY_URL': 'http://source:8081',
-        'DEST_SCHEMA_REGISTRY_URL': 'http://dest:8081',
+        logger.info("All authentication validation tests passed")
+        return True
+    except Exception as e:
+        logger.error(f"Authentication validation test failed with unexpected error: {e}")
+        return False
+
+def run_id_collision_with_cleanup() -> bool:
+    """Run the migration script with ID collisions and CLEANUP_DESTINATION=true."""
+    env = os.environ.copy()
+    env.update({
+        'SOURCE_SCHEMA_REGISTRY_URL': 'http://localhost:38081',
+        'DEST_SCHEMA_REGISTRY_URL': 'http://localhost:38082',
         'ENABLE_MIGRATION': 'true',
-        'CLEANUP_DESTINATION': 'true'
+        'DRY_RUN': 'false',
+        'CLEANUP_DESTINATION': 'true',
+        'DEST_IMPORT_MODE': 'false'
     })
+    
+    try:
+        result = subprocess.run(
+            ['python', '../schema_registry_migrator.py'],
+            env=env,
+            check=True,
+            capture_output=True,
+            text=True
+        )
+        logger.info(result.stdout)
+        return True
+    except subprocess.CalledProcessError as e:
+        logger.error(f"ID collision with cleanup test failed with exit code {e.returncode}")
+        logger.error(f"Output: {e.stdout}")
+        logger.error(f"Error: {e.stderr}")
+        return False
 
-    # Mock schema responses
-    source_schemas = {
-        'test-subject': [
-            {'version': 1, 'id': 1, 'schema': '{"type": "string"}'},
-            {'version': 2, 'id': 2, 'schema': '{"type": "int"}'}
-        ]
-    }
-    dest_schemas = {
-        'test-subject': [
-            {'version': 1, 'id': 1, 'schema': '{"type": "string"}'},
-            {'version': 2, 'id': 2, 'schema': '{"type": "int"}'}
-        ]
-    }
-
-    # Mock API responses
-    mocker.patch('requests.Session.get', side_effect=[
-        # get_subjects responses
-        mocker.Mock(json=lambda: ['test-subject'], raise_for_status=lambda: None),
-        mocker.Mock(json=lambda: ['test-subject'], raise_for_status=lambda: None),
-        # get_versions responses
-        mocker.Mock(json=lambda: [1, 2], raise_for_status=lambda: None),
-        mocker.Mock(json=lambda: [1, 2], raise_for_status=lambda: None),
-        # get_schema responses
-        mocker.Mock(json=lambda: {'id': 1, 'schema': '{"type": "string"}'}, raise_for_status=lambda: None),
-        mocker.Mock(json=lambda: {'id': 2, 'schema': '{"type": "int"}'}, raise_for_status=lambda: None),
-        mocker.Mock(json=lambda: {'id': 1, 'schema': '{"type": "string"}'}, raise_for_status=lambda: None),
-        mocker.Mock(json=lambda: {'id': 2, 'schema': '{"type": "int"}'}, raise_for_status=lambda: None),
-    ])
-
-    # Mock cleanup response
-    mocker.patch('requests.Session.delete', return_value=mocker.Mock(raise_for_status=lambda: None))
-
-    # Mock register schema response
-    mocker.patch('requests.Session.post', return_value=mocker.Mock(
-        json=lambda: {'id': 1},
-        raise_for_status=lambda: None
-    ))
-
-    # Run migration
-    result = main()
-
-    # Verify results
-    assert result == 0  # Should succeed despite ID collisions
-    # Verify cleanup was called
-    requests.Session.delete.assert_called()
-
-def test_id_collision_without_cleanup(mocker):
-    """Test ID collision handling when CLEANUP_DESTINATION is false."""
-    # Mock environment variables
-    mocker.patch.dict(os.environ, {
-        'SOURCE_SCHEMA_REGISTRY_URL': 'http://source:8081',
-        'DEST_SCHEMA_REGISTRY_URL': 'http://dest:8081',
+def run_id_collision_without_cleanup() -> bool:
+    """Run the migration script with ID collisions and CLEANUP_DESTINATION=false."""
+    env = os.environ.copy()
+    env.update({
+        'SOURCE_SCHEMA_REGISTRY_URL': 'http://localhost:38081',
+        'DEST_SCHEMA_REGISTRY_URL': 'http://localhost:38082',
         'ENABLE_MIGRATION': 'true',
-        'CLEANUP_DESTINATION': 'false'
+        'DRY_RUN': 'false',
+        'CLEANUP_DESTINATION': 'false',
+        'DEST_IMPORT_MODE': 'false'
     })
+    
+    try:
+        result = subprocess.run(
+            ['python', '../schema_registry_migrator.py'],
+            env=env,
+            check=False,  # We expect this to fail
+            capture_output=True,
+            text=True
+        )
+        if result.returncode == 1:  # Expected failure due to ID collision
+            logger.info("ID collision without cleanup test passed (expected failure)")
+            return True
+        else:
+            logger.error("ID collision without cleanup test failed (unexpected success)")
+            logger.error(f"Output: {result.stdout}")
+            logger.error(f"Error: {result.stderr}")
+            return False
+    except subprocess.CalledProcessError as e:
+        logger.error(f"ID collision without cleanup test failed with unexpected error: {e}")
+        return False
 
-    # Mock schema responses with ID collisions
-    source_schemas = {
-        'test-subject': [
-            {'version': 1, 'id': 1, 'schema': '{"type": "string"}'},
-            {'version': 2, 'id': 2, 'schema': '{"type": "int"}'}
-        ]
-    }
-    dest_schemas = {
-        'test-subject': [
-            {'version': 1, 'id': 1, 'schema': '{"type": "string"}'},
-            {'version': 2, 'id': 2, 'schema': '{"type": "int"}'}
-        ]
-    }
-
-    # Mock API responses
-    mocker.patch('requests.Session.get', side_effect=[
-        # get_subjects responses
-        mocker.Mock(json=lambda: ['test-subject'], raise_for_status=lambda: None),
-        mocker.Mock(json=lambda: ['test-subject'], raise_for_status=lambda: None),
-        # get_versions responses
-        mocker.Mock(json=lambda: [1, 2], raise_for_status=lambda: None),
-        mocker.Mock(json=lambda: [1, 2], raise_for_status=lambda: None),
-        # get_schema responses
-        mocker.Mock(json=lambda: {'id': 1, 'schema': '{"type": "string"}'}, raise_for_status=lambda: None),
-        mocker.Mock(json=lambda: {'id': 2, 'schema': '{"type": "int"}'}, raise_for_status=lambda: None),
-        mocker.Mock(json=lambda: {'id': 1, 'schema': '{"type": "string"}'}, raise_for_status=lambda: None),
-        mocker.Mock(json=lambda: {'id': 2, 'schema': '{"type": "int"}'}, raise_for_status=lambda: None),
-    ])
-
-    # Run migration
-    result = main()
-
-    # Verify results
-    assert result == 1  # Should fail due to ID collisions
-    # Verify cleanup was not called
-    requests.Session.delete.assert_not_called()
-
-def test_id_collision_with_cleanup_and_import_mode(mocker):
-    """Test ID collision handling with both CLEANUP_DESTINATION and DEST_IMPORT_MODE enabled."""
-    # Mock environment variables
-    mocker.patch.dict(os.environ, {
-        'SOURCE_SCHEMA_REGISTRY_URL': 'http://source:8081',
-        'DEST_SCHEMA_REGISTRY_URL': 'http://dest:8081',
+def run_id_collision_with_cleanup_and_import_mode() -> bool:
+    """Run the migration script with ID collisions, CLEANUP_DESTINATION=true, and DEST_IMPORT_MODE=true."""
+    env = os.environ.copy()
+    env.update({
+        'SOURCE_SCHEMA_REGISTRY_URL': 'http://localhost:38081',
+        'DEST_SCHEMA_REGISTRY_URL': 'http://localhost:38082',
         'ENABLE_MIGRATION': 'true',
+        'DRY_RUN': 'false',
         'CLEANUP_DESTINATION': 'true',
         'DEST_IMPORT_MODE': 'true'
     })
-
-    # Mock schema responses
-    source_schemas = {
-        'test-subject': [
-            {'version': 1, 'id': 1, 'schema': '{"type": "string"}'},
-            {'version': 2, 'id': 2, 'schema': '{"type": "int"}'}
-        ]
-    }
-    dest_schemas = {
-        'test-subject': [
-            {'version': 1, 'id': 1, 'schema': '{"type": "string"}'},
-            {'version': 2, 'id': 2, 'schema': '{"type": "int"}'}
-        ]
-    }
-
-    # Mock API responses
-    mocker.patch('requests.Session.get', side_effect=[
-        # get_subjects responses
-        mocker.Mock(json=lambda: ['test-subject'], raise_for_status=lambda: None),
-        mocker.Mock(json=lambda: ['test-subject'], raise_for_status=lambda: None),
-        # get_versions responses
-        mocker.Mock(json=lambda: [1, 2], raise_for_status=lambda: None),
-        mocker.Mock(json=lambda: [1, 2], raise_for_status=lambda: None),
-        # get_schema responses
-        mocker.Mock(json=lambda: {'id': 1, 'schema': '{"type": "string"}'}, raise_for_status=lambda: None),
-        mocker.Mock(json=lambda: {'id': 2, 'schema': '{"type": "int"}'}, raise_for_status=lambda: None),
-        mocker.Mock(json=lambda: {'id': 1, 'schema': '{"type": "string"}'}, raise_for_status=lambda: None),
-        mocker.Mock(json=lambda: {'id': 2, 'schema': '{"type": "int"}'}, raise_for_status=lambda: None),
-    ])
-
-    # Mock cleanup response
-    mocker.patch('requests.Session.delete', return_value=mocker.Mock(raise_for_status=lambda: None))
-
-    # Mock register schema response with import mode header
-    def mock_post(*args, **kwargs):
-        assert 'X-Registry-Import' in kwargs.get('headers', {})
-        return mocker.Mock(
-            json=lambda: {'id': 1},
-            raise_for_status=lambda: None
+    
+    try:
+        result = subprocess.run(
+            ['python', '../schema_registry_migrator.py'],
+            env=env,
+            check=True,
+            capture_output=True,
+            text=True
         )
-    mocker.patch('requests.Session.post', side_effect=mock_post)
+        logger.info(result.stdout)
+        return True
+    except subprocess.CalledProcessError as e:
+        logger.error(f"ID collision with cleanup and import mode test failed with exit code {e.returncode}")
+        logger.error(f"Output: {e.stdout}")
+        logger.error(f"Error: {e.stderr}")
+        return False
 
-    # Run migration
-    result = main()
+def main():
+    """Run all tests."""
+    tests = [
+        (1, "Comparison-only test", run_comparison),
+        (2, "Cleanup test", run_cleanup_only),
+        (3, "Normal migration test", run_migration),
+        (4, "Import mode migration test", run_import_mode_migration),
+        (5, "Context migration test", run_migration_with_different_contexts),
+        (6, "Same cluster context migration test", run_migration_with_same_cluster_contexts),
+        (7, "Authentication validation test", run_authentication_validation),
+        (8, "ID collision with cleanup test", run_id_collision_with_cleanup),
+        (9, "ID collision without cleanup test", run_id_collision_without_cleanup),
+        (10, "ID collision with cleanup and import mode test", run_id_collision_with_cleanup_and_import_mode)
+    ]
 
-    # Verify results
-    assert result == 0  # Should succeed
-    # Verify cleanup was called
-    requests.Session.delete.assert_called()
-    # Verify import mode header was used
-    requests.Session.post.assert_called()
+    success = True
+    for test_num, test_name, test_func in tests:
+        logger.info(f"\nRunning Test {test_num}: {test_name}...")
+        if not test_func():
+            logger.error(f"Test {test_num}: {test_name} failed")
+            success = False
+        else:
+            logger.info(f"Test {test_num}: {test_name} passed")
 
-def main(mocker=None):
-    # Test auth validation
-    logger.info("Testing authentication validation...")
-    test_auth_validation()
-    logger.info("Authentication validation tests passed")
-
-    # Test 1: Comparison only
-    logger.info("Test 1: Comparison only")
-    if not run_comparison():
-        logger.error("Comparison test failed")
-        return 1
-    
-    logger.info("Comparison test passed")
-    
-    # Populate source registry for remaining tests
-    logger.info("Populating source registry...")
-    if not populate_source():
-        logger.error("Failed to populate source registry")
-        return 1
-    
-    # Test 2: Cleanup test
-    logger.info("Test 2: Cleanup test")
-    if not run_cleanup_only():
-        logger.error("Cleanup test failed")
-        return 1
-    
-    if not verify_cleanup('http://localhost:38082'):
-        logger.error("Cleanup verification failed")
-        return 1
-    
-    logger.info("Cleanup test passed")
-    
-    # Test 3: Normal migration
-    logger.info("Test 3: Normal migration")
-    if not run_migration(import_mode=False):
-        logger.error("Normal migration failed")
-        return 1
-    
-    if not verify_migration('http://localhost:38081', 'http://localhost:38082', import_mode=False):
-        logger.error("Normal migration verification failed")
-        return 1
-    
-    logger.info("Normal migration test passed")
-    
-    # Clean up destination registry
-    try:
-        cleanup_destination()
-    except Exception as e:
-        logger.error(f"Failed to clean up destination registry: {e}")
-        return 1
-    
-    # Test 4: Import mode migration
-    logger.info("Test 4: Import mode migration")
-    if not run_migration(import_mode=True):
-        logger.error("Import mode migration failed")
-        return 1
-    
-    if not verify_migration('http://localhost:38081', 'http://localhost:38082', import_mode=True):
-        logger.error("Import mode migration verification failed")
-        return 1
-    
-    logger.info("Import mode migration test passed")
-    
-    # Test 5: Migration with destination context
-    logger.info("Test 5: Migration with destination context")
-    try:
-        # Clean up both the context and the default context
-        cleanup_destination('test-context')
-        cleanup_destination()  # Clean up default context as well
-    except Exception as e:
-        logger.error(f"Failed to clean up destination registry: {e}")
-        return 1
-    
-    if not run_migration_with_dest_context():
-        logger.error("Migration with destination context test failed")
-        return 1
-    
-    if not verify_migration_with_dest_context('http://localhost:38081', 'http://localhost:38082'):
-        logger.error("Migration with destination context verification failed")
-        return 1
-    
-    logger.info("Migration with destination context test passed")
-    
-    # Test 6: Migration with different contexts
-    logger.info("Test 6: Migration with different contexts")
-    try:
-        # Clean up both contexts
-        cleanup_destination('source-context')
-        cleanup_destination('dest-context')
-    except Exception as e:
-        logger.error(f"Failed to clean up contexts: {e}")
-        return 1
-
-    if not run_migration_with_different_contexts():
-        logger.error("Migration with different contexts test failed")
-        return 1
-    
-    if not verify_migration_with_different_contexts('http://localhost:38081', 'http://localhost:38082'):
-        logger.error("Migration with different contexts verification failed")
-        return 1
-    
-    logger.info("Migration with different contexts test passed")
-    
-    # Test 7: Migration with same cluster contexts
-    logger.info("Test 7: Migration with same cluster contexts")
-    try:
-        # Clean up both contexts
-        cleanup_destination('source-context')
-        cleanup_destination('dest-context')
-    except Exception as e:
-        logger.error(f"Failed to clean up contexts: {e}")
-        return 1
-    
-    if not run_migration_with_same_cluster_contexts():
-        logger.error("Migration with same cluster contexts test failed")
-        return 1
-    
-    if not verify_migration_with_different_contexts('http://localhost:38081', 'http://localhost:38081'):
-        logger.error("Migration with same cluster contexts verification failed")
-        return 1
-    
-    logger.info("Migration with same cluster contexts test passed")
-    
-    # Only run mock tests if mocker is provided
-    if mocker is not None:
-        # Test 8: ID collision handling with CLEANUP_DESTINATION
-        logger.info("Test 8: ID collision handling with CLEANUP_DESTINATION")
-        test_id_collision_with_cleanup(mocker)
-        
-        # Test 9: ID collision handling without CLEANUP_DESTINATION
-        logger.info("Test 9: ID collision handling without CLEANUP_DESTINATION")
-        test_id_collision_without_cleanup(mocker)
-        
-        # Test 10: ID collision handling with both CLEANUP_DESTINATION and DEST_IMPORT_MODE
-        logger.info("Test 10: ID collision handling with both CLEANUP_DESTINATION and DEST_IMPORT_MODE")
-        test_id_collision_with_cleanup_and_import_mode(mocker)
-    
-    logger.info("All tests passed successfully")
-    return 0
+    return 0 if success else 1
 
 if __name__ == "__main__":
-    exit(main())
-
-@pytest.mark.parametrize("test_func", [
-    test_id_collision_with_cleanup,
-    test_id_collision_without_cleanup,
-    test_id_collision_with_cleanup_and_import_mode
-])
-def test_id_collision_scenarios(mocker, test_func):
-    """Run all ID collision test scenarios."""
-    test_func(mocker) 
+    exit(main()) 

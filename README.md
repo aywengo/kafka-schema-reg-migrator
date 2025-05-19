@@ -80,6 +80,8 @@ This will:
 - Preserve schema IDs if import mode is enabled
 - Clean up destination if specified
 - Show migration results and statistics
+- Validate the migration by checking for any missing subjects or versions
+- Provide warnings and suggestions if any discrepancies are found
 
 ## Prerequisites
 
@@ -226,6 +228,12 @@ pytest tests/test_migration.py -v
 # Run integration tests only
 python tests/test_migration.py
 ```
+
+The test environment includes:
+- Source Schema Registry (port 38081)
+- Destination Schema Registry (port 38082)
+- Source Schema Registry UI (port 38091)
+- Destination Schema Registry UI (port 38092)
 
 ## Docker Support
 

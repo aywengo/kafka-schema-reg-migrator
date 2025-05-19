@@ -31,7 +31,7 @@ wait_for_service() {
 
     echo "Waiting for service $service_name at $url to be ready..."
     while [ $retries -lt $max_retries ]; do
-        if curl -s "$url/subjects" > /dev/null; then
+        if curl -s "$url" > /dev/null; then
             echo "Service $service_name at $url is ready!"
             return 0
         fi
@@ -59,11 +59,11 @@ trap cleanup EXIT
 
 # Start the test environment
 echo "Starting test environment..."
-docker-compose up -d schema-registry-source schema-registry-dest akhq
+docker-compose up -d schema-registry-source schema-registry-dest schema-registry-ui-source schema-registry-ui-dest
 
 # Wait for both schema registries to be ready
 echo "Waiting for schema registries to be ready..."
-if ! wait_for_service "http://localhost:38081" "schema-registry-source"; then
+if ! wait_for_service "http://localhost:38081/subjects" "schema-registry-source"; then
     echo "Source schema registry failed to start"
     docker-compose logs schema-registry-source
     if [ "$DEBUG_MODE" = false ]; then
@@ -71,7 +71,7 @@ if ! wait_for_service "http://localhost:38081" "schema-registry-source"; then
     fi
 fi
 
-if ! wait_for_service "http://localhost:38082" "schema-registry-dest"; then
+if ! wait_for_service "http://localhost:38082/subjects" "schema-registry-dest"; then
     echo "Destination schema registry failed to start"
     docker-compose logs schema-registry-dest
     if [ "$DEBUG_MODE" = false ]; then
@@ -79,11 +79,19 @@ if ! wait_for_service "http://localhost:38082" "schema-registry-dest"; then
     fi
 fi
 
-# Wait for AKHQ to be ready
-echo "Waiting for AKHQ to be ready..."
-if ! wait_for_service "http://localhost:38090" "akhq"; then
-    echo "AKHQ failed to start"
-    docker-compose logs akhq
+# Wait for Schema Registry UIs to be ready
+echo "Waiting for Schema Registry UIs to be ready..."
+if ! wait_for_service "http://localhost:38091" "schema-registry-ui-source"; then
+    echo "Source Schema Registry UI failed to start"
+    docker-compose logs schema-registry-ui-source
+    if [ "$DEBUG_MODE" = false ]; then
+        exit 1
+    fi
+fi
+
+if ! wait_for_service "http://localhost:38092" "schema-registry-ui-dest"; then
+    echo "Destination Schema Registry UI failed to start"
+    docker-compose logs schema-registry-ui-dest
     if [ "$DEBUG_MODE" = false ]; then
         exit 1
     fi
