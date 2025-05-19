@@ -134,30 +134,84 @@ def compare_schemas(source_schemas: Dict, dest_schemas: Dict) -> Tuple[Dict, Lis
         'source_only': [],
         'dest_only': [],
         'common': [],
-        'id_differences': []
+        'id_differences': [],
+        'version_differences': [],
+        'schema_differences': []
     }
 
     # Get all unique schema IDs
     source_ids = set()
     dest_ids = set()
     
+    # Check source schemas
     for subject, versions in source_schemas.items():
         for version in versions:
             source_ids.add(version['id'])
+            
+            # Check if subject exists in destination
             if subject not in dest_schemas:
-                comparison['source_only'].append(subject)
-            elif not any(v['id'] == version['id'] for v in dest_schemas[subject]):
-                comparison['id_differences'].append({
+                comparison['source_only'].append({
                     'subject': subject,
                     'version': version['version'],
-                    'source_id': version['id']
+                    'id': version['id']
                 })
+                continue
+            
+            # Check if version exists in destination
+            dest_versions = dest_schemas[subject]
+            dest_version = next((v for v in dest_versions if v['version'] == version['version']), None)
+            
+            if not dest_version:
+                comparison['version_differences'].append({
+                    'subject': subject,
+                    'version': version['version'],
+                    'source_id': version['id'],
+                    'type': 'missing_in_dest'
+                })
+            else:
+                # Check schema content
+                if version['schema'] != dest_version['schema']:
+                    comparison['schema_differences'].append({
+                        'subject': subject,
+                        'version': version['version'],
+                        'source_id': version['id'],
+                        'dest_id': dest_version['id']
+                    })
+                
+                # Check ID differences
+                if version['id'] != dest_version['id']:
+                    comparison['id_differences'].append({
+                        'subject': subject,
+                        'version': version['version'],
+                        'source_id': version['id'],
+                        'dest_id': dest_version['id']
+                    })
 
+    # Check destination schemas for items not in source
     for subject, versions in dest_schemas.items():
         for version in versions:
             dest_ids.add(version['id'])
+            
+            # Check if subject exists in source
             if subject not in source_schemas:
-                comparison['dest_only'].append(subject)
+                comparison['dest_only'].append({
+                    'subject': subject,
+                    'version': version['version'],
+                    'id': version['id']
+                })
+                continue
+            
+            # Check if version exists in source
+            source_versions = source_schemas[subject]
+            source_version = next((v for v in source_versions if v['version'] == version['version']), None)
+            
+            if not source_version:
+                comparison['version_differences'].append({
+                    'subject': subject,
+                    'version': version['version'],
+                    'dest_id': version['id'],
+                    'type': 'missing_in_source'
+                })
 
     # Find common subjects
     common_subjects = set(source_schemas.keys()) & set(dest_schemas.keys())
@@ -173,9 +227,15 @@ def compare_schemas(source_schemas: Dict, dest_schemas: Dict) -> Tuple[Dict, Lis
                     'id': version['id']
                 })
 
-    logger.info(f"Comparison complete: {len(comparison['common'])} common subjects, "
-                f"{len(comparison['source_only'])} source-only subjects, "
-                f"{len(comparison['dest_only'])} dest-only subjects")
+    # Log detailed comparison results
+    logger.info(f"Comparison complete:")
+    logger.info(f"- Common subjects: {len(comparison['common'])}")
+    logger.info(f"- Source-only subjects: {len(comparison['source_only'])}")
+    logger.info(f"- Destination-only subjects: {len(comparison['dest_only'])}")
+    logger.info(f"- Version differences: {len(comparison['version_differences'])}")
+    logger.info(f"- Schema differences: {len(comparison['schema_differences'])}")
+    logger.info(f"- ID differences: {len(comparison['id_differences'])}")
+    
     if collisions:
         logger.warning(f"Found {len(collisions)} ID collisions")
     else:
@@ -320,7 +380,7 @@ def display_migration_results(results: Dict[str, List[Dict]]):
                 f"Reason: {migration['reason']}"
             )
 
-def cleanup_destination(client: SchemaRegistryClient) -> None:
+def cleanup_registry(client: SchemaRegistryClient) -> None:
     """Clean up the destination registry by deleting all subjects."""
     try:
         subjects = client.get_subjects()
@@ -366,12 +426,39 @@ def main():
         # Display comparison results
         display_results(source_schemas, dest_schemas, comparison, collisions)
 
+        # Check for ID collisions before proceeding with migration
+        cleanup_destination = os.getenv('CLEANUP_DESTINATION', 'false').lower() == 'true'
+        if collisions:
+            if cleanup_destination:
+                logger.info("\nID COLLISIONS DETECTED but will be ignored because CLEANUP_DESTINATION=true")
+                logger.info("The following schemas have ID conflicts (will be cleaned up):")
+                for collision in collisions:
+                    logger.info(
+                        f"Subject: {collision['subject']}, "
+                        f"Version: {collision['version']}, "
+                        f"ID: {collision['id']}"
+                    )
+            else:
+                logger.error("\nID COLLISIONS DETECTED! Migration cannot proceed.")
+                logger.error("The following schemas have ID conflicts:")
+                for collision in collisions:
+                    logger.error(
+                        f"Subject: {collision['subject']}, "
+                        f"Version: {collision['version']}, "
+                        f"ID: {collision['id']}"
+                    )
+                logger.error("\nTo resolve this issue, you can:")
+                logger.error("1. Use a different context for the destination registry")
+                logger.error("2. Clean up the destination registry first (set CLEANUP_DESTINATION=true)")
+                logger.error("3. Manually resolve the ID conflicts")
+                return 1
+
         # Perform migration if enabled
         if os.getenv('ENABLE_MIGRATION', 'false').lower() == 'true':
             # Clean up destination if enabled
-            if os.getenv('CLEANUP_DESTINATION', 'false').lower() == 'true':
+            if cleanup_destination:
                 logger.info("\nCleaning up destination registry before migration...")
-                cleanup_destination(dest_client)
+                cleanup_registry(dest_client)
                 # Refresh destination schemas after cleanup
                 dest_schemas = dest_client.get_all_schemas()
 

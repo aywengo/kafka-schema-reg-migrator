@@ -28,6 +28,7 @@ docker run -e SOURCE_SCHEMA_REGISTRY_URL=http://source:8081 \
 | `SOURCE_CONTEXT` | Context name for source Schema Registry | No | - |
 | `DEST_CONTEXT` | Context name for destination Schema Registry | No | - |
 | `DEST_IMPORT_MODE` | Enable import mode to preserve schema IDs during migration | No | false |
+| `CLEANUP_DESTINATION` | Delete all subjects in destination registry before migration | No | false |
 | `LOG_LEVEL` | Logging level (DEBUG, INFO, WARNING, ERROR) | No | INFO |
 
 ## Using Environment File
@@ -47,6 +48,7 @@ DEST_PASSWORD=dest_pass
 SOURCE_CONTEXT=source-context
 DEST_CONTEXT=dest-context
 DEST_IMPORT_MODE=false
+CLEANUP_DESTINATION=false
 LOG_LEVEL=DEBUG
 ```
 
@@ -98,6 +100,7 @@ services:
       - SOURCE_CONTEXT=source-context
       - DEST_CONTEXT=dest-context
       - DEST_IMPORT_MODE=false
+      - CLEANUP_DESTINATION=false
       - LOG_LEVEL=DEBUG
 ```
 
@@ -121,4 +124,41 @@ docker run --rm kafka-schema-reg-migrator:latest env
 docker logs <container_id>
 ```
 
-3. Ensure the environment variables are properly formatted and contain valid values 
+3. Ensure the environment variables are properly formatted and contain valid values
+
+## ID Collision Handling
+
+The tool detects and handles ID collisions between source and destination registries:
+
+1. If `CLEANUP_DESTINATION=false` (default):
+   - ID collisions will stop the migration
+   - A detailed report of collisions will be provided
+   - Options for resolution will be suggested
+
+2. If `CLEANUP_DESTINATION=true`:
+   - ID collisions will be logged as informational messages
+   - The destination registry will be cleaned up before migration
+   - Migration will proceed normally
+
+## Running Tests in Docker
+
+The test suite includes both integration tests and unit tests:
+
+```bash
+# Run all tests with pytest
+docker run -it kafka-schema-reg-migrator:latest pytest tests/test_migration.py -v
+
+# Run integration tests only
+docker run -it kafka-schema-reg-migrator:latest python tests/test_migration.py
+```
+
+## Test Environment
+
+The test environment consists of:
+- Two independent Kafka clusters (source and destination)
+- Two Schema Registry instances
+- AKHQ for monitoring and management
+- Test schemas with different versions
+- Automated test scripts
+
+For detailed information about running tests, see [Running Tests](running-tests.md) 

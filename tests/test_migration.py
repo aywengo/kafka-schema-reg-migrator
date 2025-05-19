@@ -6,6 +6,7 @@ import requests
 import time
 import logging
 import subprocess
+import pytest
 from typing import Dict, List
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -482,8 +483,6 @@ def run_migration_with_different_contexts() -> bool:
         logger.error(f"Failed to create contexts: {e}")
         return False
     
-    return False
-
     try:
         result = subprocess.run(
             ['python', '../schema_registry_migrator.py'],
@@ -734,7 +733,172 @@ def test_auth_validation():
     except ValueError as e:
         assert str(e) == "Both username and password must be provided, or neither"
 
-def main():
+def test_id_collision_with_cleanup(mocker):
+    """Test ID collision handling when CLEANUP_DESTINATION is true."""
+    # Mock environment variables
+    mocker.patch.dict(os.environ, {
+        'SOURCE_SCHEMA_REGISTRY_URL': 'http://source:8081',
+        'DEST_SCHEMA_REGISTRY_URL': 'http://dest:8081',
+        'ENABLE_MIGRATION': 'true',
+        'CLEANUP_DESTINATION': 'true'
+    })
+
+    # Mock schema responses
+    source_schemas = {
+        'test-subject': [
+            {'version': 1, 'id': 1, 'schema': '{"type": "string"}'},
+            {'version': 2, 'id': 2, 'schema': '{"type": "int"}'}
+        ]
+    }
+    dest_schemas = {
+        'test-subject': [
+            {'version': 1, 'id': 1, 'schema': '{"type": "string"}'},
+            {'version': 2, 'id': 2, 'schema': '{"type": "int"}'}
+        ]
+    }
+
+    # Mock API responses
+    mocker.patch('requests.Session.get', side_effect=[
+        # get_subjects responses
+        mocker.Mock(json=lambda: ['test-subject'], raise_for_status=lambda: None),
+        mocker.Mock(json=lambda: ['test-subject'], raise_for_status=lambda: None),
+        # get_versions responses
+        mocker.Mock(json=lambda: [1, 2], raise_for_status=lambda: None),
+        mocker.Mock(json=lambda: [1, 2], raise_for_status=lambda: None),
+        # get_schema responses
+        mocker.Mock(json=lambda: {'id': 1, 'schema': '{"type": "string"}'}, raise_for_status=lambda: None),
+        mocker.Mock(json=lambda: {'id': 2, 'schema': '{"type": "int"}'}, raise_for_status=lambda: None),
+        mocker.Mock(json=lambda: {'id': 1, 'schema': '{"type": "string"}'}, raise_for_status=lambda: None),
+        mocker.Mock(json=lambda: {'id': 2, 'schema': '{"type": "int"}'}, raise_for_status=lambda: None),
+    ])
+
+    # Mock cleanup response
+    mocker.patch('requests.Session.delete', return_value=mocker.Mock(raise_for_status=lambda: None))
+
+    # Mock register schema response
+    mocker.patch('requests.Session.post', return_value=mocker.Mock(
+        json=lambda: {'id': 1},
+        raise_for_status=lambda: None
+    ))
+
+    # Run migration
+    result = main()
+
+    # Verify results
+    assert result == 0  # Should succeed despite ID collisions
+    # Verify cleanup was called
+    requests.Session.delete.assert_called()
+
+def test_id_collision_without_cleanup(mocker):
+    """Test ID collision handling when CLEANUP_DESTINATION is false."""
+    # Mock environment variables
+    mocker.patch.dict(os.environ, {
+        'SOURCE_SCHEMA_REGISTRY_URL': 'http://source:8081',
+        'DEST_SCHEMA_REGISTRY_URL': 'http://dest:8081',
+        'ENABLE_MIGRATION': 'true',
+        'CLEANUP_DESTINATION': 'false'
+    })
+
+    # Mock schema responses with ID collisions
+    source_schemas = {
+        'test-subject': [
+            {'version': 1, 'id': 1, 'schema': '{"type": "string"}'},
+            {'version': 2, 'id': 2, 'schema': '{"type": "int"}'}
+        ]
+    }
+    dest_schemas = {
+        'test-subject': [
+            {'version': 1, 'id': 1, 'schema': '{"type": "string"}'},
+            {'version': 2, 'id': 2, 'schema': '{"type": "int"}'}
+        ]
+    }
+
+    # Mock API responses
+    mocker.patch('requests.Session.get', side_effect=[
+        # get_subjects responses
+        mocker.Mock(json=lambda: ['test-subject'], raise_for_status=lambda: None),
+        mocker.Mock(json=lambda: ['test-subject'], raise_for_status=lambda: None),
+        # get_versions responses
+        mocker.Mock(json=lambda: [1, 2], raise_for_status=lambda: None),
+        mocker.Mock(json=lambda: [1, 2], raise_for_status=lambda: None),
+        # get_schema responses
+        mocker.Mock(json=lambda: {'id': 1, 'schema': '{"type": "string"}'}, raise_for_status=lambda: None),
+        mocker.Mock(json=lambda: {'id': 2, 'schema': '{"type": "int"}'}, raise_for_status=lambda: None),
+        mocker.Mock(json=lambda: {'id': 1, 'schema': '{"type": "string"}'}, raise_for_status=lambda: None),
+        mocker.Mock(json=lambda: {'id': 2, 'schema': '{"type": "int"}'}, raise_for_status=lambda: None),
+    ])
+
+    # Run migration
+    result = main()
+
+    # Verify results
+    assert result == 1  # Should fail due to ID collisions
+    # Verify cleanup was not called
+    requests.Session.delete.assert_not_called()
+
+def test_id_collision_with_cleanup_and_import_mode(mocker):
+    """Test ID collision handling with both CLEANUP_DESTINATION and DEST_IMPORT_MODE enabled."""
+    # Mock environment variables
+    mocker.patch.dict(os.environ, {
+        'SOURCE_SCHEMA_REGISTRY_URL': 'http://source:8081',
+        'DEST_SCHEMA_REGISTRY_URL': 'http://dest:8081',
+        'ENABLE_MIGRATION': 'true',
+        'CLEANUP_DESTINATION': 'true',
+        'DEST_IMPORT_MODE': 'true'
+    })
+
+    # Mock schema responses
+    source_schemas = {
+        'test-subject': [
+            {'version': 1, 'id': 1, 'schema': '{"type": "string"}'},
+            {'version': 2, 'id': 2, 'schema': '{"type": "int"}'}
+        ]
+    }
+    dest_schemas = {
+        'test-subject': [
+            {'version': 1, 'id': 1, 'schema': '{"type": "string"}'},
+            {'version': 2, 'id': 2, 'schema': '{"type": "int"}'}
+        ]
+    }
+
+    # Mock API responses
+    mocker.patch('requests.Session.get', side_effect=[
+        # get_subjects responses
+        mocker.Mock(json=lambda: ['test-subject'], raise_for_status=lambda: None),
+        mocker.Mock(json=lambda: ['test-subject'], raise_for_status=lambda: None),
+        # get_versions responses
+        mocker.Mock(json=lambda: [1, 2], raise_for_status=lambda: None),
+        mocker.Mock(json=lambda: [1, 2], raise_for_status=lambda: None),
+        # get_schema responses
+        mocker.Mock(json=lambda: {'id': 1, 'schema': '{"type": "string"}'}, raise_for_status=lambda: None),
+        mocker.Mock(json=lambda: {'id': 2, 'schema': '{"type": "int"}'}, raise_for_status=lambda: None),
+        mocker.Mock(json=lambda: {'id': 1, 'schema': '{"type": "string"}'}, raise_for_status=lambda: None),
+        mocker.Mock(json=lambda: {'id': 2, 'schema': '{"type": "int"}'}, raise_for_status=lambda: None),
+    ])
+
+    # Mock cleanup response
+    mocker.patch('requests.Session.delete', return_value=mocker.Mock(raise_for_status=lambda: None))
+
+    # Mock register schema response with import mode header
+    def mock_post(*args, **kwargs):
+        assert 'X-Registry-Import' in kwargs.get('headers', {})
+        return mocker.Mock(
+            json=lambda: {'id': 1},
+            raise_for_status=lambda: None
+        )
+    mocker.patch('requests.Session.post', side_effect=mock_post)
+
+    # Run migration
+    result = main()
+
+    # Verify results
+    assert result == 0  # Should succeed
+    # Verify cleanup was called
+    requests.Session.delete.assert_called()
+    # Verify import mode header was used
+    requests.Session.post.assert_called()
+
+def main(mocker=None):
     # Test auth validation
     logger.info("Testing authentication validation...")
     test_auth_validation()
@@ -857,8 +1021,31 @@ def main():
     
     logger.info("Migration with same cluster contexts test passed")
     
+    # Only run mock tests if mocker is provided
+    if mocker is not None:
+        # Test 8: ID collision handling with CLEANUP_DESTINATION
+        logger.info("Test 8: ID collision handling with CLEANUP_DESTINATION")
+        test_id_collision_with_cleanup(mocker)
+        
+        # Test 9: ID collision handling without CLEANUP_DESTINATION
+        logger.info("Test 9: ID collision handling without CLEANUP_DESTINATION")
+        test_id_collision_without_cleanup(mocker)
+        
+        # Test 10: ID collision handling with both CLEANUP_DESTINATION and DEST_IMPORT_MODE
+        logger.info("Test 10: ID collision handling with both CLEANUP_DESTINATION and DEST_IMPORT_MODE")
+        test_id_collision_with_cleanup_and_import_mode(mocker)
+    
     logger.info("All tests passed successfully")
     return 0
 
 if __name__ == "__main__":
-    exit(main()) 
+    exit(main())
+
+@pytest.mark.parametrize("test_func", [
+    test_id_collision_with_cleanup,
+    test_id_collision_without_cleanup,
+    test_id_collision_with_cleanup_and_import_mode
+])
+def test_id_collision_scenarios(mocker, test_func):
+    """Run all ID collision test scenarios."""
+    test_func(mocker) 

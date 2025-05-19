@@ -2,120 +2,123 @@
 
 This document describes how to run the test suite for the Kafka Schema Registry Migrator.
 
-## Prerequisites
+## Test Structure
 
-- Docker
-- Docker Compose (v2 recommended)
-- Python 3.8+ (for local testing)
+The test suite includes both integration tests and unit tests:
+
+1. Integration Tests:
+   - Comparison-only test
+   - Cleanup test
+   - Normal migration test
+   - Import mode migration test
+   - Context migration test
+   - Same cluster context migration test
+
+2. Unit Tests:
+   - Authentication validation
+   - ID collision handling with cleanup
+   - ID collision handling without cleanup
+   - ID collision handling with import mode
+
+## Running Tests
+
+### Using pytest
+
+To run all tests with pytest:
+
+```bash
+pytest tests/test_migration.py -v
+```
+
+### Running Integration Tests Only
+
+To run only the integration tests:
+
+```bash
+python tests/test_migration.py
+```
 
 ## Test Environment
 
 The test environment consists of:
 - Two independent Kafka clusters (source and destination)
 - Two Schema Registry instances
-- AKHQ (Kafka UI) for managing and viewing Kafka clusters and Schema Registries
+- AKHQ for monitoring and management
 - Test schemas with different versions
 - Automated test scripts
 
-## Running Tests Locally
+### Starting the Test Environment
 
-### 1. Make Test Script Executable
-
+1. Make sure you have Docker and Docker Compose installed
+2. Make the test script executable:
 ```bash
 chmod +x tests/run_tests.sh
 ```
 
-### 2. Run Tests
-
+3. Run the tests:
 ```bash
 cd tests
 ./run_tests.sh
 ```
 
-You can also run tests in debug mode, which keeps the environment running even if tests fail:
-
-```bash
-cd tests
-./run_tests.sh --debug
-```
-
-Debug mode is useful when you want to:
-- Inspect the environment after a test failure
-- Run tests manually
-- Debug schema registry issues
-- Check UI state after test failures
-
-When running in debug mode:
-- The environment (Docker containers) stays up even if tests fail
-- You can manually inspect the Schema Registry UI
-- You can run individual tests manually
-- You need to clean up manually using `docker-compose down`
-
-### 3. Access Kafka and Schema Registry UI
-
-The test environment includes AKHQ, a modern web-based UI that provides access to both Kafka clusters and Schema Registries:
-
-- AKHQ UI: http://localhost:38090
-
-The UI provides the following features:
-- View and manage Kafka topics
-- View and manage Schema Registry subjects
-- Monitor consumer groups
-- View schema versions and compatibility
-- Create and delete topics
-- View topic configurations
-- Monitor cluster health
-- Switch between source and destination clusters
-
-To use the UI:
-1. Open http://localhost:38090 in your browser
-2. Use the cluster selector in the top-right to switch between source and destination
-3. Access Schema Registry features through the left menu
-4. View topics, consumer groups, and other Kafka features
-
 ## Test Cases
 
-The test suite includes the following test cases:
+### Integration Tests
 
-1. **Authentication Validation Test**
-   - Tests username/password validation logic
-   - Verifies that both credentials must be provided together or neither
-   - Tests four scenarios:
-     * Both username and password provided (should succeed)
-     * Neither username nor password provided (should succeed)
-     * Only username provided (should fail)
-     * Only password provided (should fail)
-   - Ensures proper error messages for invalid combinations
-
-2. **Comparison-only Test**
+1. **Comparison-only test**:
    - Compares source and destination registries
-   - No changes are made to either registry
-   - Verifies schema statistics and version information
+   - No changes are made
+   - Verifies schema comparison functionality
 
-3. **Cleanup Test**
+2. **Cleanup test**:
    - Runs with `CLEANUP_DESTINATION=true` and `DRY_RUN=true`
-   - Verifies that the destination registry is empty after cleanup
-   - No actual migration is performed
+   - Verifies destination registry cleanup
+   - No migration is performed
 
-4. **Normal Migration Test**
+3. **Normal migration test**:
    - Migrates schemas from source to destination
-   - Verifies successful migration
-   - Checks schema versions and compatibility
+   - Verifies schema content and versions
+   - Checks for proper migration order
 
-5. **Import Mode Migration Test**
-   - Migrates schemas in import mode
-   - Verifies that schema IDs are preserved
-   - Checks schema compatibility
+4. **Import mode migration test**:
+   - Migrates schemas with `DEST_IMPORT_MODE=true`
+   - Verifies schema ID preservation
+   - Checks for proper schema content
 
-6. **Context Migration Test**
-   - Migrates schemas from default context to a specific context
-   - Verifies context creation and schema migration
-   - Checks subject naming in the destination context
+5. **Context migration test**:
+   - Migrates schemas between different contexts
+   - Verifies context-aware schema handling
+   - Checks for proper context prefixes
+
+6. **Same cluster context migration test**:
+   - Migrates schemas between contexts in the same cluster
+   - Verifies proper context isolation
+   - Checks for schema content preservation
+
+### Unit Tests
+
+1. **Authentication validation**:
+   - Tests username/password validation
+   - Verifies proper error handling
+   - Checks authentication requirements
+
+2. **ID collision handling**:
+   - Tests with `CLEANUP_DESTINATION=true`:
+     - Verifies cleanup before migration
+     - Checks for proper collision logging
+     - Ensures migration proceeds
+   - Tests with `CLEANUP_DESTINATION=false`:
+     - Verifies migration stops on collision
+     - Checks for proper error reporting
+     - Ensures no changes are made
+   - Tests with import mode:
+     - Verifies proper header handling
+     - Checks for ID preservation
+     - Ensures schema content integrity
 
 ## Test Schemas
 
 The test environment uses the following schema evolution:
-
 1. Basic schema with id and name
 2. Schema with added optional description field
 3. Schema with added array of tags
@@ -132,72 +135,43 @@ This provides coverage for:
 
 ### Common Issues
 
-1. **Docker Compose Not Found**
-   - Ensure Docker Compose is installed
-   - Try using `docker compose` instead of `docker-compose`
+1. **Schema Registry not ready**:
+   - Check if the services are running: `docker-compose ps`
+   - Check service logs: `docker-compose logs schema-registry-source schema-registry-dest`
+   - Wait for services to be fully ready (usually 30-60 seconds)
 
-2. **Port Conflicts**
-   - Check if ports 38081, 38082, and 38090 are available
-   - Stop any running Schema Registry instances or UI services
+2. **Test failures**:
+   - Check the test logs for detailed error messages
+   - Verify environment variables are set correctly
+   - Ensure no other services are using the required ports
 
-3. **Test Failures**
-   - Check Docker logs: `docker logs <container_id>`
-   - Verify network connectivity between containers
-   - Ensure sufficient wait time for services to start
+3. **ID collision errors**:
+   - Check if `CLEANUP_DESTINATION` is set appropriately
+   - Verify schema IDs in both registries
+   - Consider using a different context if needed
 
-4. **UI Access Issues**
-   - Verify that both Schema Registry instances are running
-   - Check UI container logs for connection issues
-   - Ensure no firewall rules are blocking the ports
+### Debug Mode
 
-### Debugging
+To run tests in debug mode:
 
-1. **View Container Logs**
 ```bash
-docker logs <container_id>
+DEBUG=true ./run_tests.sh
 ```
 
-2. **Check Container Status**
+This will:
+- Show more detailed logs
+- Display API responses
+- Provide additional debugging information
+
+## Cleanup
+
+After running tests, you can clean up the test environment:
+
 ```bash
-docker ps
-docker-compose ps
+docker-compose down -v
 ```
 
-3. **Inspect Network**
-```bash
-docker network inspect tests_default
-```
-
-4. **Manual Testing**
-```bash
-# Start the test environment
-cd tests
-docker-compose up -d
-
-# Run a specific test
-python test_migration.py
-
-# Clean up
-docker-compose down
-```
-
-5. **UI Troubleshooting**
-```bash
-# Check UI container logs
-docker logs tests_akhq_1
-
-# Verify Schema Registry connectivity
-curl http://localhost:38081/subjects
-curl http://localhost:38082/subjects
-
-# Verify Kafka connectivity
-kafka-topics --bootstrap-server localhost:39092 --list
-kafka-topics --bootstrap-server localhost:39093 --list
-```
-
-## Adding New Tests
-
-1. Create a new test file in the `tests` directory
-2. Follow the existing test patterns
-3. Add test cases to `run_tests.sh`
-4. Update this documentation if necessary 
+This will:
+- Stop all containers
+- Remove volumes
+- Clean up networks 
