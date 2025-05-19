@@ -6,7 +6,6 @@ import requests
 import time
 import logging
 import subprocess
-import pytest
 from typing import Dict, List
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
