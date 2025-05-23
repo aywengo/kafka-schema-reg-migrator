@@ -232,8 +232,7 @@ python tests/test_migration.py
 The test environment includes:
 - Source Schema Registry (port 38081)
 - Destination Schema Registry (port 38082)
-- Source Schema Registry UI (port 38091)
-- Destination Schema Registry UI (port 38092)
+- AKHQ UI (port 38080) - A modern UI for managing both Kafka clusters and Schema Registries
 
 ## Docker Support
 

@@ -111,41 +111,31 @@ services:
       retries: 10
       start_period: 30s
 
-  schema-registry-ui-source:
-    image: landoop/schema-registry-ui:0.9.5
-    hostname: schema-registry-ui-source
-    container_name: schema-registry-ui-source
+  akhq-ui:
+    image: tchiotludo/akhq:0.25.1
+    hostname: akhq
+    container_name: akhq
     depends_on:
-      schema-registry-source:
-        condition: service_healthy
+      - schema-registry-source
+      - schema-registry-dest
     ports:
-      - "38091:8000"
+      - "38080:8080"
     environment:
-      SCHEMAREGISTRY_URL: http://schema-registry-source:8081
-      WEBPACK_DEV_SERVER_URL: http://localhost:38091
-      SCHEMAREGISTRY_UI_TITLE: "Source Schema Registry"
+      AKHQ_CONFIGURATION: |
+        akhq:
+          connections:
+            source:
+              properties:
+                bootstrap.servers: "kafka-source:9092"
+              schema-registry:
+                url: "http://schema-registry-source:8081"
+            destination:
+              properties:
+                bootstrap.servers: "kafka-dest:9093"
+              schema-registry:
+                url: "http://schema-registry-dest:8082"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
-
-  schema-registry-ui-dest:
-    image: landoop/schema-registry-ui:0.9.5
-    hostname: schema-registry-ui-dest
-    container_name: schema-registry-ui-dest
-    depends_on:
-      schema-registry-dest:
-        condition: service_healthy
-    ports:
-      - "38092:8000"
-    environment:
-      SCHEMAREGISTRY_URL: http://schema-registry-dest:8082
-      WEBPACK_DEV_SERVER_URL: http://localhost:38092
-      SCHEMAREGISTRY_UI_TITLE: "Destination Schema Registry"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000"]
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/health"]
       interval: 10s
       timeout: 5s
       retries: 10
