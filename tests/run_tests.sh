@@ -59,7 +59,7 @@ trap cleanup EXIT
 
 # Start the test environment
 echo "Starting test environment..."
-docker-compose up -d schema-registry-source schema-registry-dest schema-registry-ui-source schema-registry-ui-dest
+docker-compose up -d schema-registry-source schema-registry-dest akhq-ui
 
 # Wait for both schema registries to be ready
 echo "Waiting for schema registries to be ready..."
@@ -79,19 +79,11 @@ if ! wait_for_service "http://localhost:38082/subjects" "schema-registry-dest"; 
     fi
 fi
 
-# Wait for Schema Registry UIs to be ready
-echo "Waiting for Schema Registry UIs to be ready..."
-if ! wait_for_service "http://localhost:38091" "schema-registry-ui-source"; then
-    echo "Source Schema Registry UI failed to start"
-    docker-compose logs schema-registry-ui-source
-    if [ "$DEBUG_MODE" = false ]; then
-        exit 1
-    fi
-fi
-
-if ! wait_for_service "http://localhost:38092" "schema-registry-ui-dest"; then
-    echo "Destination Schema Registry UI failed to start"
-    docker-compose logs schema-registry-ui-dest
+# Wait for Akhq UI to be ready
+echo "Waiting for Akhq UI to be ready..."
+if ! wait_for_service "http://localhost:38080" "akhq-ui"; then
+    echo "Akhq UI failed to start"
+    docker-compose logs akhq-ui
     if [ "$DEBUG_MODE" = false ]; then
         exit 1
     fi

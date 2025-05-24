@@ -60,21 +60,22 @@ The test environment includes:
    - Source registry (port 38081)
    - Destination registry (port 38082)
 
-3. **Schema Registry UIs**:
-   - Source UI (port 38091)
-   - Destination UI (port 38092)
+3. **AKHQ UI**:
+   - Single UI for both clusters (port 38080)
 
-### Accessing the UIs
+### Accessing the UI
 
-You can access the Schema Registry UIs at:
-- Source UI: http://localhost:38091
-- Destination UI: http://localhost:38092
+You can access the AKHQ UI at:
+- http://localhost:38080
 
-These UIs provide a web interface to:
+The AKHQ UI provides a comprehensive interface to:
 - Browse and search schemas
 - View schema versions
 - Compare schema versions
 - Manage subjects and versions
+- Monitor Kafka clusters
+- View consumer groups
+- Browse topics and messages
 
 ### Test Cases
 
@@ -124,13 +125,12 @@ If you encounter issues:
    docker-compose logs
    ```
 
-3. Check Schema Registry UIs:
-   - Source: http://localhost:38091
-   - Destination: http://localhost:38092
+3. Check AKHQ UI:
+   - http://localhost:38080
 
 4. Verify ports are not in use:
    ```bash
-   lsof -i :38081,38082,38091,38092,39092,39093
+   lsof -i :38081,38082,38080,39092,39093
    ```
 
 ## Test Environment
@@ -140,8 +140,7 @@ The test environment consists of:
 - Destination Kafka cluster (port 39093)
 - Source Schema Registry (port 38081)
 - Destination Schema Registry (port 38082)
-- Source Schema Registry UI (port 38091)
-- Destination Schema Registry UI (port 38092)
+- AKHQ UI (port 38080)
 
 ## Test Schemas
 
