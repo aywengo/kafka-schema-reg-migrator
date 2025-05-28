@@ -13,12 +13,16 @@ The test suite includes both integration tests and unit tests:
    - Import mode migration test
    - Context migration test
    - Same cluster context migration test
+   - Migration with read-only subjects test
+   - Migration with ID preservation test
+   - Retry failed migrations test
 
 2. Unit Tests:
    - Authentication validation
    - ID collision handling with cleanup
    - ID collision handling without cleanup
    - ID collision handling with import mode
+   - Subject mode API test
 
 ## Running Tests
 
@@ -91,6 +95,10 @@ The test suite includes:
 8. ID collision with cleanup test
 9. ID collision without cleanup test
 10. ID collision with cleanup and import mode test
+11. Subject mode API test
+12. Migration with read-only subjects test
+13. Migration with ID preservation test
+14. Retry failed migrations test
 
 ### Debugging
 

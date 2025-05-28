@@ -29,6 +29,8 @@ docker run -e SOURCE_SCHEMA_REGISTRY_URL=http://source:8081 \
 | `DEST_CONTEXT` | Context name for destination Schema Registry | No | - |
 | `DEST_IMPORT_MODE` | Enable import mode to preserve schema IDs during migration | No | false |
 | `CLEANUP_DESTINATION` | Delete all subjects in destination registry before migration | No | false |
+| `PRESERVE_IDS` | Preserve original schema IDs during migration | No | false |
+| `RETRY_FAILED` | Automatically retry failed migrations | No | true |
 | `LOG_LEVEL` | Logging level (DEBUG, INFO, WARNING, ERROR) | No | INFO |
 
 ## Using Environment File
@@ -49,6 +51,8 @@ SOURCE_CONTEXT=source-context
 DEST_CONTEXT=dest-context
 DEST_IMPORT_MODE=false
 CLEANUP_DESTINATION=false
+PRESERVE_IDS=false
+RETRY_FAILED=true
 LOG_LEVEL=DEBUG
 ```
 
@@ -101,6 +105,8 @@ services:
       - DEST_CONTEXT=dest-context
       - DEST_IMPORT_MODE=false
       - CLEANUP_DESTINATION=false
+      - PRESERVE_IDS=false
+      - RETRY_FAILED=true
       - LOG_LEVEL=DEBUG
 ```
 
@@ -139,6 +145,14 @@ The tool detects and handles ID collisions between source and destination regist
    - ID collisions will be logged as informational messages
    - The destination registry will be cleaned up before migration
    - Migration will proceed normally
+
+## Read-Only Subject Handling
+
+The migrator automatically handles subjects in read-only mode:
+- Temporarily changes read-only subjects to READWRITE mode
+- Performs the migration
+- Restores the original mode
+- Failed migrations are retried with mode changes (if `RETRY_FAILED=true`)
 
 ## Running Tests in Docker
 

@@ -157,6 +157,8 @@ ENABLE_MIGRATION=false    # Set to true to enable migration
 DRY_RUN=true             # Set to false to perform actual migration
 DEST_IMPORT_MODE=false   # Set to true to enable import mode for destination
 CLEANUP_DESTINATION=false # Set to true to clean up destination before migration
+PRESERVE_IDS=false       # Set to true to preserve original schema IDs
+RETRY_FAILED=true        # Set to false to disable retry of failed migrations
 ```
 
 ## Usage
@@ -201,6 +203,8 @@ docker run -it --env-file .env kafka-schema-reg-migrator bash -c "cd tests && ./
 | `DEST_CONTEXT` | Context name for destination Schema Registry | No | - |
 | `DEST_IMPORT_MODE` | Enable import mode to preserve schema IDs | No | false |
 | `CLEANUP_DESTINATION` | Delete all subjects in destination registry before migration | No | false |
+| `PRESERVE_IDS` | Preserve original schema IDs during migration | No | false |
+| `RETRY_FAILED` | Automatically retry failed migrations | No | true |
 | `LOG_LEVEL` | Logging level (DEBUG, INFO, WARNING, ERROR) | No | INFO |
 
 ### ID Collision Handling
@@ -216,6 +220,14 @@ The tool detects and handles ID collisions between source and destination regist
    - ID collisions will be logged as informational messages
    - The destination registry will be cleaned up before migration
    - Migration will proceed normally
+
+### Read-Only Subject Handling
+
+The tool automatically handles subjects that are in read-only mode:
+- Detects subjects not in READWRITE mode
+- Temporarily changes them to READWRITE for migration
+- Restores the original mode after migration
+- Failed migrations are automatically retried with mode changes (if `RETRY_FAILED=true`)
 
 ### Running Tests
 

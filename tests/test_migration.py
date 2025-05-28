@@ -173,6 +173,15 @@ def cleanup_destination(context: str = None):
         # Delete each subject individually
         for subject in subjects:
             try:
+                # First check if subject is in read-only mode and change it if needed
+                mode_response = session.get(f"{base_url}/mode/{subject}")
+                if mode_response.status_code == 200:
+                    mode_data = mode_response.json()
+                    if mode_data.get('mode') != 'READWRITE':
+                        # Change to READWRITE mode before deletion
+                        session.put(f"{base_url}/mode/{subject}", json={'mode': 'READWRITE'})
+                        logger.info(f"Changed subject {subject} to READWRITE mode for deletion")
+                
                 delete_response = session.delete(f"{base_url}/subjects/{subject}")
                 delete_response.raise_for_status()
                 logger.info(f"Successfully deleted subject {subject}")
@@ -859,6 +868,330 @@ def run_id_collision_with_cleanup_and_import_mode() -> bool:
         logger.error(f"Error: {e.stderr}")
         return False
 
+def setup_readonly_subject(url: str, subject: str) -> bool:
+    """Set up a subject in read-only mode for testing."""
+    session = create_session_with_retries()
+    try:
+        # First create a schema for the subject
+        schema = {
+            "type": "record",
+            "name": "ReadOnlyTest",
+            "fields": [
+                {"name": "id", "type": "int"},
+                {"name": "data", "type": "string"}
+            ]
+        }
+        
+        # Register the schema
+        response = session.post(
+            f"{url}/subjects/{subject}/versions",
+            json={"schema": json.dumps(schema)}
+        )
+        response.raise_for_status()
+        logger.info(f"Created schema for subject {subject}")
+        
+        # Set the subject to READONLY mode
+        response = session.put(
+            f"{url}/mode/{subject}",
+            json={"mode": "READONLY"}
+        )
+        response.raise_for_status()
+        logger.info(f"Set subject {subject} to READONLY mode")
+        
+        return True
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Failed to set up read-only subject: {e}")
+        return False
+
+def verify_subject_mode(url: str, subject: str, expected_mode: str) -> bool:
+    """Verify that a subject has the expected mode."""
+    session = create_session_with_retries()
+    try:
+        response = session.get(f"{url}/mode/{subject}")
+        if response.status_code == 404:
+            # No specific mode set, defaults to READWRITE
+            actual_mode = "READWRITE"
+        else:
+            response.raise_for_status()
+            actual_mode = response.json().get('mode', 'READWRITE')
+        
+        if actual_mode == expected_mode:
+            logger.info(f"Subject {subject} has expected mode: {expected_mode}")
+            return True
+        else:
+            logger.error(f"Subject {subject} has mode {actual_mode}, expected {expected_mode}")
+            return False
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Failed to verify subject mode: {e}")
+        return False
+
+def run_migration_with_readonly_subjects() -> bool:
+    """Test migration with subjects in read-only mode."""
+    # Clean up destination first to avoid ID collisions
+    try:
+        cleanup_destination()
+    except Exception as e:
+        logger.error(f"Failed to clean up before read-only test: {e}")
+        return False
+    
+    # First, set up a read-only subject in the destination
+    if not setup_readonly_subject('http://localhost:38082', 'test-readonly'):
+        logger.error("Failed to set up read-only subject")
+        return False
+    
+    # Verify the subject is in READONLY mode
+    if not verify_subject_mode('http://localhost:38082', 'test-readonly', 'READONLY'):
+        return False
+    
+    # Run migration with retry enabled
+    env = os.environ.copy()
+    env.update({
+        'SOURCE_SCHEMA_REGISTRY_URL': 'http://localhost:38081',
+        'DEST_SCHEMA_REGISTRY_URL': 'http://localhost:38082',
+        'ENABLE_MIGRATION': 'true',
+        'DRY_RUN': 'false',
+        'RETRY_FAILED': 'true',
+        'PRESERVE_IDS': 'false'
+    })
+    
+    try:
+        result = subprocess.run(
+            ['python', '../schema_registry_migrator.py'],
+            env=env,
+            check=True,
+            capture_output=True,
+            text=True
+        )
+        logger.info(result.stdout)
+        
+        # Check if the output mentions mode changes
+        if "changing to READWRITE" in result.stdout and "Restoring subject" in result.stdout:
+            logger.info("Migration correctly handled read-only subjects")
+        else:
+            logger.warning("Migration output doesn't show expected mode handling")
+        
+        # Verify the subject is back to READONLY mode after migration
+        if not verify_subject_mode('http://localhost:38082', 'test-readonly', 'READONLY'):
+            logger.error("Subject mode was not restored after migration")
+            return False
+        
+        return True
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Migration with read-only subjects failed with exit code {e.returncode}")
+        logger.error(f"Output: {e.stdout}")
+        logger.error(f"Error: {e.stderr}")
+        return False
+
+def run_migration_with_preserve_ids() -> bool:
+    """Test migration with ID preservation enabled."""
+    # Clean up destination first
+    cleanup_destination()
+    
+    # Wait a bit for cleanup to complete
+    time.sleep(2)
+    
+    env = os.environ.copy()
+    env.update({
+        'SOURCE_SCHEMA_REGISTRY_URL': 'http://localhost:38081',
+        'DEST_SCHEMA_REGISTRY_URL': 'http://localhost:38082',
+        'ENABLE_MIGRATION': 'true',
+        'DRY_RUN': 'false',
+        'PRESERVE_IDS': 'true',
+        'DEST_IMPORT_MODE': 'true',  # Required for ID preservation
+        'CLEANUP_DESTINATION': 'false'  # Already cleaned up
+    })
+    
+    try:
+        result = subprocess.run(
+            ['python', '../schema_registry_migrator.py'],
+            env=env,
+            check=False,  # Don't raise on non-zero exit
+            capture_output=True,
+            text=True
+        )
+        
+        logger.info(f"Migration exit code: {result.returncode}")
+        logger.info(f"Migration stdout: {result.stdout}")
+        if result.stderr:
+            logger.error(f"Migration stderr: {result.stderr}")
+        
+        if result.returncode != 0:
+            logger.error("Migration failed")
+            return False
+        
+        # Wait a bit for schemas to be registered
+        time.sleep(2)
+        
+        # Verify that IDs were preserved
+        source_schemas = get_schemas('http://localhost:38081')
+        dest_schemas = get_schemas('http://localhost:38082')
+        
+        logger.info(f"Source schemas: {list(source_schemas.keys())}")
+        logger.info(f"Dest schemas: {list(dest_schemas.keys())}")
+        
+        for subject, source_versions in source_schemas.items():
+            if subject not in dest_schemas:
+                logger.error(f"Subject {subject} not found in destination")
+                return False
+            
+            dest_versions = dest_schemas[subject]
+            for src_ver, dst_ver in zip(source_versions, dest_versions):
+                if src_ver['id'] != dst_ver['id']:
+                    logger.error(f"ID not preserved for {subject}: source ID {src_ver['id']}, dest ID {dst_ver['id']}")
+                    return False
+        
+        logger.info("All schema IDs were preserved successfully")
+        return True
+    except Exception as e:
+        logger.error(f"Migration with ID preservation test failed with exception: {e}")
+        return False
+
+def run_retry_failed_migrations_test() -> bool:
+    """Test the retry mechanism for failed migrations."""
+    # Clean up destination first
+    try:
+        cleanup_destination()
+        time.sleep(2)  # Wait for cleanup
+    except Exception as e:
+        logger.error(f"Failed to clean up before retry test: {e}")
+        return False
+    
+    # First, create a subject that will fail initially
+    session = create_session_with_retries()
+    
+    # Create a schema in destination that will cause a failure
+    try:
+        schema = {
+            "type": "record",
+            "name": "FailTest",
+            "fields": [
+                {"name": "id", "type": "int"}
+            ]
+        }
+        
+        # Register in destination
+        response = session.post(
+            'http://localhost:38082/subjects/test-fail/versions',
+            json={"schema": json.dumps(schema)}
+        )
+        response.raise_for_status()
+        
+        # Set to READONLY to cause initial failure
+        response = session.put(
+            'http://localhost:38082/mode/test-fail',
+            json={"mode": "READONLY"}
+        )
+        response.raise_for_status()
+        logger.info("Set up test-fail subject in READONLY mode")
+        
+        # Create a different schema in source to trigger migration
+        schema2 = {
+            "type": "record",
+            "name": "FailTest",
+            "fields": [
+                {"name": "id", "type": "int"},
+                {"name": "name", "type": "string"}
+            ]
+        }
+        
+        response = session.post(
+            'http://localhost:38081/subjects/test-fail/versions',
+            json={"schema": json.dumps(schema2)}
+        )
+        response.raise_for_status()
+        logger.info("Created different schema in source for test-fail")
+        
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Failed to set up retry test: {e}")
+        return False
+    
+    # Run migration with retry enabled
+    env = os.environ.copy()
+    env.update({
+        'SOURCE_SCHEMA_REGISTRY_URL': 'http://localhost:38081',
+        'DEST_SCHEMA_REGISTRY_URL': 'http://localhost:38082',
+        'ENABLE_MIGRATION': 'true',
+        'DRY_RUN': 'false',
+        'RETRY_FAILED': 'true',
+        'PRESERVE_IDS': 'false'
+    })
+    
+    try:
+        result = subprocess.run(
+            ['python', '../schema_registry_migrator.py'],
+            env=env,
+            check=False,  # Don't raise on non-zero exit
+            capture_output=True,
+            text=True
+        )
+        
+        logger.info(f"Migration exit code: {result.returncode}")
+        logger.info(f"Migration stdout length: {len(result.stdout)}")
+        
+        # Log key parts of the output - check both stdout and stderr
+        output = result.stdout + (result.stderr or '')
+        
+        if "changing to READWRITE" in output:
+            logger.info("Found mode change in output")
+        if "Retrying failed migrations" in output:
+            logger.info("Found retry in output")
+        if "test-fail" in output:
+            logger.info("Found test-fail subject in output")
+            
+        # Check if retry was triggered or if mode handling occurred
+        if "Retrying failed migrations" in output or "changing to READWRITE" in output:
+            logger.info("Retry mechanism or mode handling was triggered as expected")
+            
+            # Verify the subject mode was restored
+            if not verify_subject_mode('http://localhost:38082', 'test-fail', 'READONLY'):
+                logger.error("Subject mode was not restored after retry")
+                return False
+            
+            return True
+        else:
+            # Log more details to understand why
+            logger.error("Neither retry mechanism nor mode handling was triggered")
+            logger.error(f"Full stdout:\n{result.stdout}")
+            if result.stderr:
+                logger.error(f"Full stderr:\n{result.stderr}")
+            return False
+            
+    except Exception as e:
+        logger.error(f"Retry test failed with exception: {e}")
+        return False
+
+def run_subject_mode_api_test() -> bool:
+    """Test the subject mode API methods directly."""
+    try:
+        client = SchemaRegistryClient(url='http://localhost:38082')
+        
+        # Test getting mode for a subject without specific mode
+        mode = client.get_subject_mode('test-value')
+        if mode != 'READWRITE':
+            logger.error(f"Expected default mode READWRITE, got {mode}")
+            return False
+        
+        # Test setting mode
+        client.set_subject_mode('test-value', 'READONLY')
+        mode = client.get_subject_mode('test-value')
+        if mode != 'READONLY':
+            logger.error(f"Failed to set mode to READONLY, got {mode}")
+            return False
+        
+        # Test changing mode back
+        client.set_subject_mode('test-value', 'READWRITE')
+        mode = client.get_subject_mode('test-value')
+        if mode != 'READWRITE':
+            logger.error(f"Failed to set mode back to READWRITE, got {mode}")
+            return False
+        
+        logger.info("Subject mode API tests passed")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Subject mode API test failed: {e}")
+        return False
+
 def main():
     """Run all tests."""
     tests = [
@@ -871,7 +1204,11 @@ def main():
         (7, "Authentication validation test", run_authentication_validation),
         (8, "ID collision with cleanup test", run_id_collision_with_cleanup),
         (9, "ID collision without cleanup test", run_id_collision_without_cleanup),
-        (10, "ID collision with cleanup and import mode test", run_id_collision_with_cleanup_and_import_mode)
+        (10, "ID collision with cleanup and import mode test", run_id_collision_with_cleanup_and_import_mode),
+        (11, "Subject mode API test", run_subject_mode_api_test),
+        (12, "Migration with read-only subjects test", run_migration_with_readonly_subjects),
+        (13, "Migration with ID preservation test", run_migration_with_preserve_ids),
+        (14, "Retry failed migrations test", run_retry_failed_migrations_test)
     ]
 
     success = True

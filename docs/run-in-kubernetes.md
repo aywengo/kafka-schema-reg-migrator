@@ -77,6 +77,10 @@ spec:
               key: dest-password
         - name: LOG_LEVEL
           value: "INFO"
+        - name: PRESERVE_IDS
+          value: "false"
+        - name: RETRY_FAILED
+          value: "true"
       restartPolicy: Never
   backoffLimit: 0
 ```
@@ -151,6 +155,10 @@ spec:
           value: "source-context"
         - name: DEST_CONTEXT
           value: "dest-context"
+        - name: PRESERVE_IDS
+          value: "false"
+        - name: RETRY_FAILED
+          value: "true"
       restartPolicy: Never
   backoffLimit: 0
 ``` 
