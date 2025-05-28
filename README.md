@@ -4,13 +4,18 @@ A tool for migrating schemas between Kafka Schema Registry instances, with suppo
 
 ## Features
 
-- Migrate schemas between Schema Registry instances
-- Support for Schema Registry contexts
-- Import mode to preserve schema IDs
-- ID collision detection and handling
-- Dry run mode for safe testing
-- Comprehensive test suite
-- Docker support
+- **Schema Comparison**: Compare schemas between source and destination registries
+- **ID Collision Detection**: Detect and report schema ID conflicts before migration
+- **Dry Run Mode**: Test migration without making actual changes
+- **Import Mode Support**: Preserve schema IDs during migration (requires compatible Schema Registry)
+- **Context Support**: Migrate schemas between different contexts or clusters
+- **Authentication**: Support for basic authentication on both registries
+- **Cleanup Option**: Optionally clean destination registry before migration
+- **Detailed Logging**: Comprehensive logging of all operations
+- **Docker Support**: Easy deployment using Docker
+- **Kubernetes Support**: Deploy as a Kubernetes Job
+- **Read-Only Subject Handling**: Automatically handles subjects in read-only mode during migration
+- **Schema Type Support**: Supports migration of AVRO, JSON, and PROTOBUF schemas
 
 ## QuickStart
 

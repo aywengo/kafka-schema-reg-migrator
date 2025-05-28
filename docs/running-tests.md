@@ -83,22 +83,25 @@ The AKHQ UI provides a comprehensive interface to:
 
 ### Test Cases
 
-The test suite includes:
+The test suite includes the following test cases:
 
-1. Comparison-only test
-2. Cleanup test
-3. Normal migration test
-4. Import mode migration test
-5. Context migration test
-6. Same cluster context migration test
-7. Authentication validation test
-8. ID collision with cleanup test
-9. ID collision without cleanup test
-10. ID collision with cleanup and import mode test
-11. Subject mode API test
-12. Migration with read-only subjects test
-13. Migration with ID preservation test
-14. Retry failed migrations test
+1. **Comparison-only test**: Tests schema comparison without migration
+2. **Cleanup test**: Tests destination registry cleanup functionality
+3. **Normal migration test**: Tests basic schema migration
+4. **Import mode migration test**: Tests migration with ID preservation
+5. **Context migration test**: Tests migration between different contexts
+6. **Same cluster context migration test**: Tests migration within same cluster but different contexts
+7. **Authentication validation test**: Tests authentication parameter validation
+8. **ID collision with cleanup test**: Tests handling of ID collisions with cleanup enabled
+9. **ID collision without cleanup test**: Tests handling of ID collisions without cleanup
+10. **ID collision with cleanup and import mode test**: Tests ID collision handling with both cleanup and import mode
+11. **Subject mode API test**: Tests the subject mode API methods
+12. **Migration with read-only subjects test**: Tests migration when subjects are in read-only mode
+13. **Migration with ID preservation test**: Tests migration with PRESERVE_IDS enabled
+14. **Retry failed migrations test**: Tests automatic retry of failed migrations
+15. **JSON schema migration test**: Tests migration of JSON schemas
+16. **PROTOBUF schema migration test**: Tests migration of PROTOBUF schemas
+17. **Mixed schema types test**: Tests migration with multiple schema types in one run
 
 ### Debugging
 

@@ -1192,6 +1192,265 @@ def run_subject_mode_api_test() -> bool:
         logger.error(f"Subject mode API test failed: {e}")
         return False
 
+def run_json_schema_migration_test() -> bool:
+    """Test migration of JSON schemas."""
+    # Clean up destination first
+    try:
+        cleanup_destination()
+        time.sleep(2)
+    except Exception as e:
+        logger.error(f"Failed to clean up before JSON schema test: {e}")
+        return False
+    
+    session = create_session_with_retries()
+    
+    try:
+        # Create a JSON schema in source
+        json_schema = {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "object",
+            "properties": {
+                "id": {"type": "integer"},
+                "name": {"type": "string"},
+                "email": {"type": "string", "format": "email"}
+            },
+            "required": ["id", "name"]
+        }
+        
+        # Register JSON schema in source
+        response = session.post(
+            'http://localhost:38081/subjects/test-json-subject/versions',
+            json={
+                "schema": json.dumps(json_schema),
+                "schemaType": "JSON"
+            }
+        )
+        response.raise_for_status()
+        logger.info("Created JSON schema in source registry")
+        
+        # Run migration
+        env = os.environ.copy()
+        env.update({
+            'SOURCE_SCHEMA_REGISTRY_URL': 'http://localhost:38081',
+            'DEST_SCHEMA_REGISTRY_URL': 'http://localhost:38082',
+            'ENABLE_MIGRATION': 'true',
+            'DRY_RUN': 'false',
+            'PRESERVE_IDS': 'false'
+        })
+        
+        result = subprocess.run(
+            ['python', '../schema_registry_migrator.py'],
+            env=env,
+            check=False,
+            capture_output=True,
+            text=True
+        )
+        
+        if result.returncode != 0:
+            logger.error(f"Migration failed with exit code {result.returncode}")
+            logger.error(f"Stderr: {result.stderr}")
+            return False
+        
+        # Verify the schema was migrated with correct type
+        response = session.get('http://localhost:38082/subjects/test-json-subject/versions/1')
+        if response.status_code == 200:
+            schema_info = response.json()
+            if schema_info.get('schemaType') == 'JSON':
+                logger.info("JSON schema migrated successfully with correct type")
+                return True
+            else:
+                logger.error(f"Schema type mismatch: expected JSON, got {schema_info.get('schemaType')}")
+                return False
+        else:
+            logger.error("Failed to verify migrated JSON schema")
+            return False
+            
+    except Exception as e:
+        logger.error(f"JSON schema migration test failed: {e}")
+        return False
+
+def run_protobuf_schema_migration_test() -> bool:
+    """Test migration of PROTOBUF schemas."""
+    # Clean up destination first
+    try:
+        cleanup_destination()
+        time.sleep(2)
+    except Exception as e:
+        logger.error(f"Failed to clean up before PROTOBUF schema test: {e}")
+        return False
+    
+    session = create_session_with_retries()
+    
+    try:
+        # Create a simple Protobuf schema
+        protobuf_schema = '''
+syntax = "proto3";
+
+message TestMessage {
+  int32 id = 1;
+  string name = 2;
+  string email = 3;
+}
+'''
+        
+        # Register PROTOBUF schema in source
+        response = session.post(
+            'http://localhost:38081/subjects/test-protobuf-subject/versions',
+            json={
+                "schema": protobuf_schema,
+                "schemaType": "PROTOBUF"
+            }
+        )
+        response.raise_for_status()
+        logger.info("Created PROTOBUF schema in source registry")
+        
+        # Run migration
+        env = os.environ.copy()
+        env.update({
+            'SOURCE_SCHEMA_REGISTRY_URL': 'http://localhost:38081',
+            'DEST_SCHEMA_REGISTRY_URL': 'http://localhost:38082',
+            'ENABLE_MIGRATION': 'true',
+            'DRY_RUN': 'false',
+            'PRESERVE_IDS': 'false'
+        })
+        
+        result = subprocess.run(
+            ['python', '../schema_registry_migrator.py'],
+            env=env,
+            check=False,
+            capture_output=True,
+            text=True
+        )
+        
+        if result.returncode != 0:
+            logger.error(f"Migration failed with exit code {result.returncode}")
+            logger.error(f"Stderr: {result.stderr}")
+            return False
+        
+        # Verify the schema was migrated with correct type
+        response = session.get('http://localhost:38082/subjects/test-protobuf-subject/versions/1')
+        if response.status_code == 200:
+            schema_info = response.json()
+            if schema_info.get('schemaType') == 'PROTOBUF':
+                logger.info("PROTOBUF schema migrated successfully with correct type")
+                return True
+            else:
+                logger.error(f"Schema type mismatch: expected PROTOBUF, got {schema_info.get('schemaType')}")
+                return False
+        else:
+            logger.error("Failed to verify migrated PROTOBUF schema")
+            return False
+            
+    except Exception as e:
+        logger.error(f"PROTOBUF schema migration test failed: {e}")
+        return False
+
+def run_mixed_schema_types_test() -> bool:
+    """Test migration with multiple schema types in one run."""
+    # Clean up destination first
+    try:
+        cleanup_destination()
+        time.sleep(2)
+    except Exception as e:
+        logger.error(f"Failed to clean up before mixed schema types test: {e}")
+        return False
+    
+    session = create_session_with_retries()
+    
+    try:
+        # Create AVRO schema
+        avro_schema = {
+            "type": "record",
+            "name": "MixedTest",
+            "fields": [
+                {"name": "id", "type": "int"},
+                {"name": "data", "type": "string"}
+            ]
+        }
+        
+        # Create JSON schema
+        json_schema = {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "object",
+            "properties": {
+                "id": {"type": "integer"},
+                "data": {"type": "string"}
+            }
+        }
+        
+        # Create PROTOBUF schema
+        protobuf_schema = '''
+syntax = "proto3";
+
+message MixedTest {
+  int32 id = 1;
+  string data = 2;
+}
+'''
+        
+        # Register all schemas in source
+        schemas = [
+            ("test-mixed-avro", json.dumps(avro_schema), "AVRO"),
+            ("test-mixed-json", json.dumps(json_schema), "JSON"),
+            ("test-mixed-protobuf", protobuf_schema, "PROTOBUF")
+        ]
+        
+        for subject, schema, schema_type in schemas:
+            response = session.post(
+                f'http://localhost:38081/subjects/{subject}/versions',
+                json={
+                    "schema": schema,
+                    "schemaType": schema_type
+                }
+            )
+            response.raise_for_status()
+            logger.info(f"Created {schema_type} schema for subject {subject}")
+        
+        # Run migration
+        env = os.environ.copy()
+        env.update({
+            'SOURCE_SCHEMA_REGISTRY_URL': 'http://localhost:38081',
+            'DEST_SCHEMA_REGISTRY_URL': 'http://localhost:38082',
+            'ENABLE_MIGRATION': 'true',
+            'DRY_RUN': 'false',
+            'PRESERVE_IDS': 'false'
+        })
+        
+        result = subprocess.run(
+            ['python', '../schema_registry_migrator.py'],
+            env=env,
+            check=False,
+            capture_output=True,
+            text=True
+        )
+        
+        if result.returncode != 0:
+            logger.error(f"Migration failed with exit code {result.returncode}")
+            logger.error(f"Stderr: {result.stderr}")
+            return False
+        
+        # Verify all schemas were migrated with correct types
+        all_correct = True
+        for subject, _, expected_type in schemas:
+            response = session.get(f'http://localhost:38082/subjects/{subject}/versions/1')
+            if response.status_code == 200:
+                schema_info = response.json()
+                actual_type = schema_info.get('schemaType', 'AVRO')
+                if actual_type == expected_type:
+                    logger.info(f"Schema {subject} migrated with correct type: {expected_type}")
+                else:
+                    logger.error(f"Schema type mismatch for {subject}: expected {expected_type}, got {actual_type}")
+                    all_correct = False
+            else:
+                logger.error(f"Failed to verify migrated schema for {subject}")
+                all_correct = False
+        
+        return all_correct
+            
+    except Exception as e:
+        logger.error(f"Mixed schema types test failed: {e}")
+        return False
+
 def main():
     """Run all tests."""
     tests = [
@@ -1208,7 +1467,10 @@ def main():
         (11, "Subject mode API test", run_subject_mode_api_test),
         (12, "Migration with read-only subjects test", run_migration_with_readonly_subjects),
         (13, "Migration with ID preservation test", run_migration_with_preserve_ids),
-        (14, "Retry failed migrations test", run_retry_failed_migrations_test)
+        (14, "Retry failed migrations test", run_retry_failed_migrations_test),
+        (15, "JSON schema migration test", run_json_schema_migration_test),
+        (16, "PROTOBUF schema migration test", run_protobuf_schema_migration_test),
+        (17, "Mixed schema types test", run_mixed_schema_types_test)
     ]
 
     success = True

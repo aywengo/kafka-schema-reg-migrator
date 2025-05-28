@@ -85,7 +85,8 @@ class SchemaRegistryClient:
                 schemas[subject].append({
                     'version': version,
                     'id': schema_info.get('id'),
-                    'schema': schema_info.get('schema')
+                    'schema': schema_info.get('schema'),
+                    'schemaType': schema_info.get('schemaType', 'AVRO')
                 })
         
         logger.info(f"Retrieved schemas for {len(schemas)} subjects")
@@ -166,11 +167,11 @@ class SchemaRegistryClient:
                     return result
             raise
 
-    def check_schema_compatibility(self, subject: str, schema: str, version: str = "latest") -> bool:
+    def check_schema_compatibility(self, subject: str, schema: str, schema_type: str = "AVRO", version: str = "latest") -> bool:
         """Check if a schema is compatible with a specific version."""
         payload = {
             "schema": schema,
-            "schemaType": "AVRO"
+            "schemaType": schema_type
         }
         response = self.session.post(
             self._get_url(f"/compatibility/subjects/{subject}/versions/{version}"),
@@ -320,6 +321,7 @@ def migrate_schemas(source_client: SchemaRegistryClient, dest_client: SchemaRegi
             version = version_info['version']
             schema = version_info['schema']
             schema_id = version_info['id'] if preserve_ids else None
+            schema_type = version_info.get('schemaType', 'AVRO')
             
             # Check if schema already exists in destination
             if subject in dest_schemas:
@@ -345,9 +347,9 @@ def migrate_schemas(source_client: SchemaRegistryClient, dest_client: SchemaRegi
                         mode_changed = True
                     
                     try:
-                        # Register schema in destination
-                        result = dest_client.register_schema(subject, schema, schema_id=schema_id)
-                        logger.info(f"Successfully migrated {subject} version {version}")
+                        # Register schema in destination with correct schema type
+                        result = dest_client.register_schema(subject, schema, schema_type=schema_type, schema_id=schema_id)
+                        logger.info(f"Successfully migrated {subject} version {version} (type: {schema_type})")
                         migration_results['successful'].append({
                             'subject': subject,
                             'version': version,
@@ -361,7 +363,7 @@ def migrate_schemas(source_client: SchemaRegistryClient, dest_client: SchemaRegi
                             dest_client.set_subject_mode(subject, subject_mode)
                 else:
                     # In dry run mode, just check compatibility
-                    is_compatible = dest_client.check_schema_compatibility(subject, schema)
+                    is_compatible = dest_client.check_schema_compatibility(subject, schema, schema_type=schema_type)
                     if is_compatible:
                         logger.info(f"[DRY RUN] Would migrate {subject} version {version} - compatible")
                         migration_results['successful'].append({
@@ -426,6 +428,7 @@ def retry_failed_migrations(source_client: SchemaRegistryClient, dest_client: Sc
         
         schema = version_info['schema']
         schema_id = version_info['id'] if preserve_ids else None
+        schema_type = version_info.get('schemaType', 'AVRO')
         
         try:
             # Check and update subject mode
@@ -438,9 +441,9 @@ def retry_failed_migrations(source_client: SchemaRegistryClient, dest_client: Sc
                 mode_changed = True
             
             try:
-                # Register schema in destination
-                result = dest_client.register_schema(subject, schema, schema_id=schema_id)
-                logger.info(f"Successfully migrated {subject} version {version} on retry")
+                # Register schema in destination with correct schema type
+                result = dest_client.register_schema(subject, schema, schema_type=schema_type, schema_id=schema_id)
+                logger.info(f"Successfully migrated {subject} version {version} on retry (type: {schema_type})")
                 retry_results['successful'].append({
                     'subject': subject,
                     'version': version,
