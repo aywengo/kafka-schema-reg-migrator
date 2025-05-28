@@ -72,6 +72,26 @@ class SchemaRegistryClient:
         logger.debug(f"Retrieved schema for subject {subject} version {version}")
         return schema_info
 
+    def get_subject_schemas(self, subject: str) -> List[Dict]:
+        """Get all schemas for a specific subject."""
+        try:
+            versions = self.get_versions(subject)
+            schemas = []
+            for version in versions:
+                schema_info = self.get_schema(subject, version)
+                schemas.append({
+                    'version': version,
+                    'id': schema_info.get('id'),
+                    'schema': schema_info.get('schema'),
+                    'schemaType': schema_info.get('schemaType', 'AVRO')
+                })
+            return schemas
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                # Subject doesn't exist
+                return []
+            raise
+
     def get_all_schemas(self) -> Dict[str, List[Dict]]:
         """Get all schemas with their versions."""
         schemas = {}
@@ -378,6 +398,42 @@ def migrate_schemas(source_client: SchemaRegistryClient, dest_client: SchemaRegi
                             'version': version,
                             'reason': 'Incompatible schema'
                         })
+            except requests.exceptions.HTTPError as e:
+                if e.response.status_code == 409:
+                    # Conflict - schema might already exist, let's check
+                    logger.warning(f"Conflict for {subject} version {version}, checking if schema exists...")
+                    
+                    # Refresh destination schemas for this subject
+                    try:
+                        dest_subject_schemas = dest_client.get_subject_schemas(subject)
+                        if any(v['schema'] == schema for v in dest_subject_schemas):
+                            logger.info(f"Schema already exists for {subject} version {version}, marking as skipped")
+                            migration_results['skipped'].append({
+                                'subject': subject,
+                                'version': version,
+                                'reason': 'Schema already exists (409 conflict)'
+                            })
+                        else:
+                            logger.error(f"409 Conflict but schema doesn't match for {subject} version {version}")
+                            migration_results['failed'].append({
+                                'subject': subject,
+                                'version': version,
+                                'reason': f'409 Conflict: {str(e)}'
+                            })
+                    except Exception as check_error:
+                        logger.error(f"Failed to check existing schema: {check_error}")
+                        migration_results['failed'].append({
+                            'subject': subject,
+                            'version': version,
+                            'reason': f'409 Conflict and failed to verify: {str(e)}'
+                        })
+                else:
+                    logger.error(f"Failed to migrate {subject} version {version}: {str(e)}")
+                    migration_results['failed'].append({
+                        'subject': subject,
+                        'version': version,
+                        'reason': str(e)
+                    })
             except Exception as e:
                 logger.error(f"Failed to migrate {subject} version {version}: {str(e)}")
                 migration_results['failed'].append({
@@ -401,6 +457,9 @@ def retry_failed_migrations(source_client: SchemaRegistryClient, dest_client: Sc
     
     # Get source schemas for retry
     source_schemas = source_client.get_all_schemas()
+    
+    # Get destination schemas to check what already exists
+    dest_schemas = dest_client.get_all_schemas()
     
     for failed in failed_migrations:
         subject = failed['subject']
@@ -430,6 +489,18 @@ def retry_failed_migrations(source_client: SchemaRegistryClient, dest_client: Sc
         schema_id = version_info['id'] if preserve_ids else None
         schema_type = version_info.get('schemaType', 'AVRO')
         
+        # Check if schema already exists in destination
+        if subject in dest_schemas:
+            dest_versions = dest_schemas[subject]
+            if any(v['schema'] == schema for v in dest_versions):
+                logger.info(f"Skipping {subject} version {version} - schema already exists in destination")
+                retry_results['skipped'].append({
+                    'subject': subject,
+                    'version': version,
+                    'reason': 'Schema already exists in destination'
+                })
+                continue
+        
         try:
             # Check and update subject mode
             subject_mode = dest_client.get_subject_mode(subject)
@@ -456,6 +527,42 @@ def retry_failed_migrations(source_client: SchemaRegistryClient, dest_client: Sc
                     logger.info(f"Restoring subject {subject} mode to {subject_mode}")
                     dest_client.set_subject_mode(subject, subject_mode)
                     
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 409:
+                # Conflict - schema might already exist, let's check
+                logger.warning(f"Conflict for {subject} version {version}, checking if schema exists...")
+                
+                # Refresh destination schemas
+                try:
+                    dest_subject_schemas = dest_client.get_subject_schemas(subject)
+                    if any(v['schema'] == schema for v in dest_subject_schemas):
+                        logger.info(f"Schema already exists for {subject} version {version}, marking as skipped")
+                        retry_results['skipped'].append({
+                            'subject': subject,
+                            'version': version,
+                            'reason': 'Schema already exists (409 conflict)'
+                        })
+                    else:
+                        logger.error(f"409 Conflict but schema doesn't match for {subject} version {version}")
+                        retry_results['failed'].append({
+                            'subject': subject,
+                            'version': version,
+                            'reason': f'409 Conflict: {str(e)}'
+                        })
+                except Exception as check_error:
+                    logger.error(f"Failed to check existing schema: {check_error}")
+                    retry_results['failed'].append({
+                        'subject': subject,
+                        'version': version,
+                        'reason': f'409 Conflict and failed to verify: {str(e)}'
+                    })
+            else:
+                logger.error(f"Failed to migrate {subject} version {version} on retry: {str(e)}")
+                retry_results['failed'].append({
+                    'subject': subject,
+                    'version': version,
+                    'reason': str(e)
+                })
         except Exception as e:
             logger.error(f"Failed to migrate {subject} version {version} on retry: {str(e)}")
             retry_results['failed'].append({

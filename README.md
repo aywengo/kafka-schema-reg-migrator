@@ -234,6 +234,14 @@ The tool automatically handles subjects that are in read-only mode:
 - Restores the original mode after migration
 - Failed migrations are automatically retried with mode changes (if `RETRY_FAILED=true`)
 
+### Conflict Handling
+
+The tool handles 409 Conflict errors gracefully:
+- When a schema already exists in the destination, it will be skipped
+- The tool verifies if the existing schema matches the source schema
+- Conflicts are logged and reported in the migration summary
+- This prevents duplicate schema registrations and ensures idempotent migrations
+
 ### Running Tests
 
 The test suite includes both integration tests and unit tests:

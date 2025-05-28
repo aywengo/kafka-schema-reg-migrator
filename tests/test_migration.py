@@ -1451,6 +1451,94 @@ message MixedTest {
         logger.error(f"Mixed schema types test failed: {e}")
         return False
 
+def run_conflict_handling_test() -> bool:
+    """Test handling of 409 conflicts when schema already exists."""
+    # Clean up destination first
+    try:
+        cleanup_destination()
+        time.sleep(2)
+    except Exception as e:
+        logger.error(f"Failed to clean up before conflict handling test: {e}")
+        return False
+    
+    session = create_session_with_retries()
+    
+    try:
+        # Create a schema in both source and destination
+        schema = {
+            "type": "record",
+            "name": "ConflictTest",
+            "fields": [
+                {"name": "id", "type": "int"},
+                {"name": "data", "type": "string"}
+            ]
+        }
+        
+        # Register in source
+        response = session.post(
+            'http://localhost:38081/subjects/test-conflict/versions',
+            json={"schema": json.dumps(schema)}
+        )
+        response.raise_for_status()
+        logger.info("Created schema in source registry")
+        
+        # Register same schema in destination
+        response = session.post(
+            'http://localhost:38082/subjects/test-conflict/versions',
+            json={"schema": json.dumps(schema)}
+        )
+        response.raise_for_status()
+        logger.info("Created same schema in destination registry")
+        
+        # Run migration - should skip the existing schema
+        env = os.environ.copy()
+        env.update({
+            'SOURCE_SCHEMA_REGISTRY_URL': 'http://localhost:38081',
+            'DEST_SCHEMA_REGISTRY_URL': 'http://localhost:38082',
+            'ENABLE_MIGRATION': 'true',
+            'DRY_RUN': 'false',
+            'PRESERVE_IDS': 'false'
+        })
+        
+        result = subprocess.run(
+            ['python', '../schema_registry_migrator.py'],
+            env=env,
+            check=False,
+            capture_output=True,
+            text=True
+        )
+        
+        if result.returncode != 0:
+            logger.error(f"Migration failed with exit code {result.returncode}")
+            logger.error(f"Stderr: {result.stderr}")
+            return False
+        
+        # Check if the schema was skipped
+        output = result.stdout + (result.stderr or '')
+        if "schema already exists" in output.lower() or "skipping" in output.lower():
+            logger.info("Migration correctly skipped existing schema")
+            
+            # Verify only one version exists
+            response = session.get('http://localhost:38082/subjects/test-conflict/versions')
+            if response.status_code == 200:
+                versions = response.json()
+                if len(versions) == 1:
+                    logger.info("Confirmed only one version exists (no duplicate)")
+                    return True
+                else:
+                    logger.error(f"Expected 1 version, found {len(versions)}")
+                    return False
+            else:
+                logger.error("Failed to verify versions")
+                return False
+        else:
+            logger.error("Migration did not skip existing schema as expected")
+            return False
+            
+    except Exception as e:
+        logger.error(f"Conflict handling test failed: {e}")
+        return False
+
 def main():
     """Run all tests."""
     tests = [
@@ -1470,7 +1558,8 @@ def main():
         (14, "Retry failed migrations test", run_retry_failed_migrations_test),
         (15, "JSON schema migration test", run_json_schema_migration_test),
         (16, "PROTOBUF schema migration test", run_protobuf_schema_migration_test),
-        (17, "Mixed schema types test", run_mixed_schema_types_test)
+        (17, "Mixed schema types test", run_mixed_schema_types_test),
+        (18, "Conflict handling test", run_conflict_handling_test)
     ]
 
     success = True
