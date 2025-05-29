@@ -3,7 +3,7 @@
 import os
 import json
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 import requests
 from dotenv import load_dotenv
 
@@ -354,15 +354,34 @@ def compare_schemas(source_schemas: Dict, dest_schemas: Dict) -> Tuple[Dict, Lis
     common_subjects = set(source_schemas.keys()) & set(dest_schemas.keys())
     comparison['common'] = list(common_subjects)
 
-    # Check for ID collisions
+    # Build a map of destination IDs to their schemas for collision detection
+    dest_id_to_schema = {}
+    for subject, versions in dest_schemas.items():
+        for version in versions:
+            dest_id_to_schema[version['id']] = {
+                'schema': version['schema'],
+                'subject': subject,
+                'version': version['version']
+            }
+
+    # Check for ID collisions - same ID but different schema content
     for subject, versions in source_schemas.items():
         for version in versions:
-            if version['id'] in dest_ids:
-                collisions.append({
-                    'subject': subject,
-                    'version': version['version'],
-                    'id': version['id']
-                })
+            source_id = version['id']
+            source_schema = version['schema']
+            
+            # Check if this ID exists in destination
+            if source_id in dest_id_to_schema:
+                dest_info = dest_id_to_schema[source_id]
+                # Only flag as collision if the schemas are different
+                if source_schema != dest_info['schema']:
+                    collisions.append({
+                        'subject': subject,
+                        'version': version['version'],
+                        'id': source_id,
+                        'dest_subject': dest_info['subject'],
+                        'dest_version': dest_info['version']
+                    })
 
     # Log detailed comparison results
     logger.info(f"Comparison complete:")
@@ -508,7 +527,18 @@ def migrate_schemas(source_client: SchemaRegistryClient, dest_client: SchemaRegi
                             # Get the latest version to provide more context
                             latest_version = dest_client.get_latest_version(subject)
                             logger.error(f"409 Conflict for {subject}: schema content differs from existing versions. Latest version in destination: {latest_version}")
-                            migration_results['failed'].append({
+                            
+                            # Use enhanced error reporting
+                            try:
+                                comparison = compare_schema_versions(source_client, dest_client, subject, version)
+                                if comparison['differences']:
+                                    logger.error(f"Schema differences for {subject} version {version}:")
+                                    for diff in comparison['differences']:
+                                        logger.error(f"  - {diff}")
+                            except Exception as comp_error:
+                                logger.debug(f"Could not compare schemas: {comp_error}")
+                            
+                            retry_results['failed'].append({
                                 'subject': subject,
                                 'version': version,
                                 'reason': f'409 Conflict: Different schema already exists (latest version: {latest_version})'
@@ -667,6 +697,17 @@ def retry_failed_migrations(source_client: SchemaRegistryClient, dest_client: Sc
                         # Get the latest version to provide more context
                         latest_version = dest_client.get_latest_version(subject)
                         logger.error(f"409 Conflict for {subject}: schema content differs from existing versions. Latest version in destination: {latest_version}")
+                        
+                        # Use enhanced error reporting
+                        try:
+                            comparison = compare_schema_versions(source_client, dest_client, subject, version)
+                            if comparison['differences']:
+                                logger.error(f"Schema differences for {subject} version {version}:")
+                                for diff in comparison['differences']:
+                                    logger.error(f"  - {diff}")
+                        except Exception as comp_error:
+                            logger.debug(f"Could not compare schemas: {comp_error}")
+                        
                         retry_results['failed'].append({
                             'subject': subject,
                             'version': version,
@@ -719,9 +760,9 @@ def display_results(source_schemas: Dict, dest_schemas: Dict, comparison: Dict, 
         logger.warning("\nID Collisions Found:")
         for collision in collisions:
             logger.warning(
-                f"Subject: {collision['subject']}, "
-                f"Version: {collision['version']}, "
-                f"ID: {collision['id']}"
+                f"ID {collision['id']}: "
+                f"Source: {collision['subject']} v{collision['version']} <-> "
+                f"Dest: {collision['dest_subject']} v{collision['dest_version']}"
             )
     else:
         logger.info("\nNo ID collisions found")
@@ -785,9 +826,24 @@ def cleanup_registry(client: SchemaRegistryClient, permanent: bool = True) -> No
                     logger.debug(f"Could not check/change mode for {subject}: {e}")
                 
                 # Add permanent=true parameter for hard delete
-                url = f"{client.url}/subjects/{subject}"
+                url = client._get_url(f"/subjects/{subject}")
+                
                 if permanent:
+                    # For permanent delete, we need to do soft delete first
+                    try:
+                        logger.debug(f"Performing soft delete for subject {subject}")
+                        response = client.session.delete(url)
+                        response.raise_for_status()
+                        logger.debug(f"Soft delete successful for subject {subject}")
+                    except requests.exceptions.HTTPError as e:
+                        if e.response.status_code != 404:
+                            logger.debug(f"Soft delete failed with status {e.response.status_code}: {e}")
+                    
+                    # Now perform hard delete
                     url += "?permanent=true"
+                    logger.debug(f"Performing hard delete for subject {subject} with URL: {url}")
+                else:
+                    logger.debug(f"Performing soft delete for subject {subject} with URL: {url}")
                 
                 response = client.session.delete(url)
                 response.raise_for_status()
@@ -802,7 +858,7 @@ def cleanup_registry(client: SchemaRegistryClient, permanent: bool = True) -> No
                     logger.warning(f"Cannot permanently delete subject {subject} (may be protected or in read-only mode)")
                     # Try soft delete instead
                     try:
-                        response = client.session.delete(f"{client.url}/subjects/{subject}")
+                        response = client.session.delete(client._get_url(f"/subjects/{subject}"))
                         response.raise_for_status()
                         logger.info(f"Successfully soft deleted subject {subject}")
                     except:
@@ -817,6 +873,194 @@ def cleanup_registry(client: SchemaRegistryClient, permanent: bool = True) -> No
     except requests.exceptions.RequestException as e:
         logger.error(f"Failed to clean up destination registry: {e}")
         raise
+
+def cleanup_specific_subjects(client: SchemaRegistryClient, subjects_to_clean: List[str], permanent: bool = True) -> None:
+    """Clean up specific subjects in the destination registry.
+    
+    Args:
+        client: The Schema Registry client
+        subjects_to_clean: List of subject names to delete
+        permanent: If True, permanently delete subjects (hard delete). If False, soft delete.
+    """
+    if not subjects_to_clean:
+        logger.info("No subjects specified for cleanup")
+        return
+        
+    logger.info(f"Cleaning up {len(subjects_to_clean)} specific subjects...")
+    
+    success_count = 0
+    failed_subjects = []
+    
+    for subject in subjects_to_clean:
+        try:
+            # First check if subject exists by trying to get it from the subjects list
+            all_subjects = client.get_subjects()
+            logger.debug(f"All subjects in registry: {all_subjects}")
+            logger.debug(f"Checking if '{subject}' is in subjects list...")
+            if subject not in all_subjects:
+                logger.info(f"Subject {subject} not found in subjects list, skipping")
+                continue
+            else:
+                logger.debug(f"Subject '{subject}' found in subjects list, proceeding with deletion")
+            
+            # Check if subject is in read-only mode and change it if needed
+            try:
+                subject_mode = client.get_subject_mode(subject)
+                if subject_mode != 'READWRITE':
+                    logger.info(f"Subject {subject} is in {subject_mode} mode, changing to READWRITE for deletion")
+                    client.set_subject_mode(subject, 'READWRITE')
+            except Exception as e:
+                logger.debug(f"Could not check/change mode for {subject}: {e}")
+            
+            # Add permanent=true parameter for hard delete
+            url = client._get_url(f"/subjects/{subject}")
+            
+            if permanent:
+                # For permanent delete, we need to do soft delete first
+                try:
+                    logger.debug(f"Performing soft delete for subject {subject}")
+                    response = client.session.delete(url)
+                    response.raise_for_status()
+                    logger.debug(f"Soft delete successful for subject {subject}")
+                except requests.exceptions.HTTPError as e:
+                    if e.response.status_code != 404:
+                        logger.debug(f"Soft delete failed with status {e.response.status_code}: {e}")
+                
+                # Now perform hard delete
+                url += "?permanent=true"
+                logger.debug(f"Performing hard delete for subject {subject} with URL: {url}")
+            else:
+                logger.debug(f"Performing soft delete for subject {subject} with URL: {url}")
+            
+            response = client.session.delete(url)
+            response.raise_for_status()
+            logger.info(f"Successfully {'permanently' if permanent else 'soft'} deleted subject {subject}")
+            success_count += 1
+            
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                logger.warning(f"Subject {subject} not found (may have been already deleted)")
+                continue
+            elif e.response.status_code == 422:
+                # 422 can occur when trying to permanently delete a subject that's in read-only mode
+                logger.warning(f"Cannot permanently delete subject {subject} (may be protected or in read-only mode)")
+                # Try soft delete instead
+                try:
+                    response = client.session.delete(client._get_url(f"/subjects/{subject}"))
+                    response.raise_for_status()
+                    logger.info(f"Successfully soft deleted subject {subject}")
+                    success_count += 1
+                except:
+                    logger.error(f"Could not delete subject {subject}")
+                    failed_subjects.append(subject)
+                continue
+            logger.error(f"Failed to delete subject {subject}: {e}")
+            failed_subjects.append(subject)
+        except Exception as e:
+            logger.error(f"Failed to delete subject {subject}: {e}")
+            failed_subjects.append(subject)
+    
+    if failed_subjects:
+        logger.warning(f"Successfully cleaned {success_count} subjects, failed to clean {len(failed_subjects)} subjects")
+        logger.warning(f"Failed subjects: {', '.join(failed_subjects)}")
+    else:
+        logger.info(f"Successfully cleaned all {success_count} specified subjects")
+
+def compare_schema_versions(source_client: SchemaRegistryClient, dest_client: SchemaRegistryClient, 
+                          subject: str, version: int) -> Dict[str, Any]:
+    """Compare specific schema versions between source and destination.
+    
+    Args:
+        source_client: Source Schema Registry client
+        dest_client: Destination Schema Registry client
+        subject: Subject name
+        version: Version number to compare
+        
+    Returns:
+        Dictionary with comparison details
+    """
+    comparison = {
+        'subject': subject,
+        'version': version,
+        'source_exists': False,
+        'dest_exists': False,
+        'schemas_match': False,
+        'source_schema': None,
+        'dest_schema': None,
+        'differences': []
+    }
+    
+    try:
+        # Get source schema
+        source_schema_info = source_client.get_schema(subject, version)
+        comparison['source_exists'] = True
+        comparison['source_schema'] = {
+            'id': source_schema_info.get('id'),
+            'schema': source_schema_info.get('schema'),
+            'schemaType': source_schema_info.get('schemaType', 'AVRO')
+        }
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code != 404:
+            raise
+    
+    try:
+        # Get destination schema
+        dest_schema_info = dest_client.get_schema(subject, version)
+        comparison['dest_exists'] = True
+        comparison['dest_schema'] = {
+            'id': dest_schema_info.get('id'),
+            'schema': dest_schema_info.get('schema'),
+            'schemaType': dest_schema_info.get('schemaType', 'AVRO')
+        }
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code != 404:
+            raise
+    
+    # Compare schemas if both exist
+    if comparison['source_exists'] and comparison['dest_exists']:
+        source_schema = comparison['source_schema']['schema']
+        dest_schema = comparison['dest_schema']['schema']
+        
+        comparison['schemas_match'] = source_schema == dest_schema
+        
+        if not comparison['schemas_match']:
+            # Try to parse and compare as JSON for better error reporting
+            try:
+                import json
+                source_json = json.loads(source_schema)
+                dest_json = json.loads(dest_schema)
+                
+                # Simple field comparison for AVRO schemas
+                if isinstance(source_json, dict) and isinstance(dest_json, dict):
+                    source_fields = {f['name'] for f in source_json.get('fields', [])} if 'fields' in source_json else set()
+                    dest_fields = {f['name'] for f in dest_json.get('fields', [])} if 'fields' in dest_json else set()
+                    
+                    fields_only_in_source = source_fields - dest_fields
+                    fields_only_in_dest = dest_fields - source_fields
+                    
+                    if fields_only_in_source:
+                        comparison['differences'].append(f"Fields only in source: {', '.join(fields_only_in_source)}")
+                    if fields_only_in_dest:
+                        comparison['differences'].append(f"Fields only in destination: {', '.join(fields_only_in_dest)}")
+                    
+                    # Check namespace differences
+                    if source_json.get('namespace') != dest_json.get('namespace'):
+                        comparison['differences'].append(
+                            f"Namespace differs: source='{source_json.get('namespace')}', "
+                            f"dest='{dest_json.get('namespace')}'"
+                        )
+                    
+                    # Check type differences
+                    if source_json.get('type') != dest_json.get('type'):
+                        comparison['differences'].append(
+                            f"Type differs: source='{source_json.get('type')}', "
+                            f"dest='{dest_json.get('type')}'"
+                        )
+            except:
+                # If parsing fails, just note that schemas differ
+                comparison['differences'].append("Schema content differs (unable to parse for detailed comparison)")
+    
+    return comparison
 
 def set_mode_for_all_subjects(client: SchemaRegistryClient, mode: str) -> None:
     """Set the mode for all subjects in the registry.
@@ -933,18 +1177,18 @@ def main():
                 logger.info("The following schemas have ID conflicts (will be cleaned up):")
                 for collision in collisions:
                     logger.info(
-                        f"Subject: {collision['subject']}, "
-                        f"Version: {collision['version']}, "
-                        f"ID: {collision['id']}"
+                        f"ID {collision['id']}: "
+                        f"Source: {collision['subject']} v{collision['version']} <-> "
+                        f"Dest: {collision['dest_subject']} v{collision['dest_version']}"
                     )
             else:
                 logger.error("\nID COLLISIONS DETECTED! Migration cannot proceed.")
                 logger.error("The following schemas have ID conflicts:")
                 for collision in collisions:
                     logger.error(
-                        f"Subject: {collision['subject']}, "
-                        f"Version: {collision['version']}, "
-                        f"ID: {collision['id']}"
+                        f"ID {collision['id']}: "
+                        f"Source: {collision['subject']} v{collision['version']} <-> "
+                        f"Dest: {collision['dest_subject']} v{collision['dest_version']}"
                     )
                 logger.error("\nTo resolve this issue, you can:")
                 logger.error("1. Use a different context for the destination registry")
@@ -962,6 +1206,17 @@ def main():
                 cleanup_registry(dest_client, permanent=permanent_delete)
                 # Refresh destination schemas after cleanup
                 dest_schemas = dest_client.get_all_schemas()
+            
+            # Clean up specific subjects if specified
+            cleanup_subjects_env = os.getenv('CLEANUP_SUBJECTS', '')
+            if cleanup_subjects_env:
+                subjects_to_clean = [s.strip() for s in cleanup_subjects_env.split(',') if s.strip()]
+                if subjects_to_clean:
+                    logger.info(f"\nCleaning up specific subjects: {', '.join(subjects_to_clean)}")
+                    permanent_delete = os.getenv('PERMANENT_DELETE', 'true').lower() == 'true'
+                    cleanup_specific_subjects(dest_client, subjects_to_clean, permanent=permanent_delete)
+                    # Refresh destination schemas after cleanup
+                    dest_schemas = dest_client.get_all_schemas()
 
             # Perform migration (dry run by default)
             dry_run = os.getenv('DRY_RUN', 'true').lower() == 'true'

@@ -29,6 +29,7 @@ docker run -e SOURCE_SCHEMA_REGISTRY_URL=http://source:8081 \
 | `DEST_CONTEXT` | Context name for destination Schema Registry | No | - |
 | `DEST_IMPORT_MODE` | Set global IMPORT mode on destination registry | No | false |
 | `CLEANUP_DESTINATION` | Delete all subjects in destination registry before migration | No | false |
+| `CLEANUP_SUBJECTS` | Comma-separated list of specific subjects to delete before migration | No | - |
 | `PRESERVE_IDS` | Preserve original schema IDs during migration (uses subject-level IMPORT mode) | No | false |
 | `RETRY_FAILED` | Automatically retry failed migrations | No | true |
 | `PERMANENT_DELETE` | Use permanent (hard) delete when cleaning up destination | No | true |
@@ -53,6 +54,7 @@ SOURCE_CONTEXT=source-context
 DEST_CONTEXT=dest-context
 DEST_IMPORT_MODE=false
 CLEANUP_DESTINATION=false
+CLEANUP_SUBJECTS=
 PRESERVE_IDS=false
 RETRY_FAILED=true
 PERMANENT_DELETE=true
@@ -115,6 +117,7 @@ services:
       - DEST_CONTEXT=dest-context
       - DEST_IMPORT_MODE=false
       - CLEANUP_DESTINATION=false
+      - CLEANUP_SUBJECTS=
       - PRESERVE_IDS=false
       - RETRY_FAILED=true
       - PERMANENT_DELETE=true

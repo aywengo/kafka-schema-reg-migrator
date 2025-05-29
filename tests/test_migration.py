@@ -10,8 +10,20 @@ from typing import Dict, List
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import sys
-sys.path.append('..')  # Add parent directory to path
-from schema_registry_migrator import SchemaRegistryClient
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from schema_registry_migrator import (
+    SchemaRegistryClient, 
+    compare_schemas, 
+    migrate_schemas, 
+    display_results, 
+    display_migration_results,
+    cleanup_registry,
+    retry_failed_migrations,
+    set_global_mode_after_migration,
+    cleanup_specific_subjects,
+    compare_schema_versions
+)
+import unittest
 
 # Configure logging
 logging.basicConfig(
@@ -887,8 +899,176 @@ def run_authentication_validation() -> bool:
         logger.error(f"Authentication validation test failed with unexpected error: {e}")
         return False
 
+def setup_id_collision_scenario(session: requests.Session) -> bool:
+    """Set up schemas with ID collisions between source and destination."""
+    try:
+        # First, clean up both registries
+        logger.info("Cleaning up registries for ID collision test...")
+        
+        # Clean destination
+        try:
+            response = session.get('http://localhost:38082/subjects')
+            if response.status_code == 200:
+                subjects = response.json()
+                for subject in subjects:
+                    # First soft delete
+                    try:
+                        session.delete(f'http://localhost:38082/subjects/{subject}')
+                    except:
+                        pass
+                    # Then hard delete
+                    try:
+                        session.delete(f'http://localhost:38082/subjects/{subject}?permanent=true')
+                    except:
+                        pass
+        except:
+            pass
+        
+        # Clean source
+        try:
+            response = session.get('http://localhost:38081/subjects')
+            if response.status_code == 200:
+                subjects = response.json()
+                for subject in subjects:
+                    # First soft delete
+                    try:
+                        session.delete(f'http://localhost:38081/subjects/{subject}')
+                    except:
+                        pass
+                    # Then hard delete
+                    try:
+                        session.delete(f'http://localhost:38081/subjects/{subject}?permanent=true')
+                    except:
+                        pass
+        except:
+            pass
+        
+        # Set source to IMPORT mode to control IDs
+        try:
+            session.put('http://localhost:38081/mode', json={'mode': 'IMPORT'})
+            logger.info("Set source to IMPORT mode")
+        except:
+            pass
+        
+        # Set destination to IMPORT mode to control IDs
+        try:
+            session.put('http://localhost:38082/mode', json={'mode': 'IMPORT'})
+            logger.info("Set destination to IMPORT mode")
+        except:
+            pass
+        
+        # Create DIFFERENT schemas in destination with IDs 1, 2, 3
+        dest_schemas = [
+            ("dest-collision-1", {
+                "type": "record",
+                "name": "DestSchema1",
+                "fields": [
+                    {"name": "id", "type": "int"},
+                    {"name": "dest_field", "type": "string"}  # Different field name
+                ]
+            }, 1),
+            ("dest-collision-2", {
+                "type": "record",
+                "name": "DestSchema2",
+                "fields": [
+                    {"name": "id", "type": "int"},
+                    {"name": "dest_data", "type": "long"}  # Different field type
+                ]
+            }, 2),
+            ("dest-collision-3", {
+                "type": "record",
+                "name": "DestSchema3",
+                "fields": [
+                    {"name": "id", "type": "int"},
+                    {"name": "dest_value", "type": "float"}  # Different field type
+                ]
+            }, 3)
+        ]
+        
+        # Register schemas in destination with specific IDs first
+        for subject, schema, schema_id in dest_schemas:
+            # First set subject to IMPORT mode
+            session.put(f'http://localhost:38082/mode/{subject}', json={'mode': 'IMPORT'})
+            
+            response = session.post(
+                f'http://localhost:38082/subjects/{subject}/versions',
+                json={"schema": json.dumps(schema), "id": schema_id}
+            )
+            response.raise_for_status()
+            actual_id = response.json()['id']
+            logger.info(f"Registered {subject} in destination with ID {actual_id}")
+            
+            # Set subject back to READWRITE
+            session.put(f'http://localhost:38082/mode/{subject}', json={'mode': 'READWRITE'})
+        
+        # Create schemas in source with SAME IDs 1, 2, 3 but different content
+        source_schemas = [
+            ("collision-test-1", {
+                "type": "record",
+                "name": "SourceSchema1",
+                "fields": [
+                    {"name": "id", "type": "int"},
+                    {"name": "source_field", "type": "string"}
+                ]
+            }, 1),
+            ("collision-test-2", {
+                "type": "record",
+                "name": "SourceSchema2",
+                "fields": [
+                    {"name": "id", "type": "int"},
+                    {"name": "source_data", "type": "string"}
+                ]
+            }, 2),
+            ("collision-test-3", {
+                "type": "record",
+                "name": "SourceSchema3",
+                "fields": [
+                    {"name": "id", "type": "int"},
+                    {"name": "source_value", "type": "double"}
+                ]
+            }, 3)
+        ]
+        
+        # Register schemas in source with specific IDs
+        for subject, schema, schema_id in source_schemas:
+            # First set subject to IMPORT mode
+            session.put(f'http://localhost:38081/mode/{subject}', json={'mode': 'IMPORT'})
+            
+            response = session.post(
+                f'http://localhost:38081/subjects/{subject}/versions',
+                json={"schema": json.dumps(schema), "id": schema_id}
+            )
+            response.raise_for_status()
+            actual_id = response.json()['id']
+            logger.info(f"Registered {subject} in source with ID {actual_id}")
+            
+            # Set subject back to READWRITE
+            session.put(f'http://localhost:38081/mode/{subject}', json={'mode': 'READWRITE'})
+        
+        # Set source back to READWRITE mode
+        session.put('http://localhost:38081/mode', json={'mode': 'READWRITE'})
+        logger.info("Set source back to READWRITE mode")
+        
+        # Set destination back to READWRITE mode
+        session.put('http://localhost:38082/mode', json={'mode': 'READWRITE'})
+        logger.info("Set destination back to READWRITE mode")
+        
+        logger.info("ID collision scenario set up successfully")
+        logger.info("Source has schemas with IDs 1,2,3 with one set of fields")
+        logger.info("Destination has different schemas with the same IDs 1,2,3")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Failed to set up ID collision scenario: {e}")
+        return False
+
 def run_id_collision_with_cleanup() -> bool:
     """Run the migration script with ID collisions and CLEANUP_DESTINATION=true."""
+    # First set up a proper ID collision scenario
+    session = create_session_with_retries()
+    if not setup_id_collision_scenario(session):
+        return False
+    
     env = os.environ.copy()
     env.update({
         'SOURCE_SCHEMA_REGISTRY_URL': 'http://localhost:38081',
@@ -917,6 +1097,11 @@ def run_id_collision_with_cleanup() -> bool:
 
 def run_id_collision_without_cleanup() -> bool:
     """Run the migration script with ID collisions and CLEANUP_DESTINATION=false."""
+    # First set up a proper ID collision scenario
+    session = create_session_with_retries()
+    if not setup_id_collision_scenario(session):
+        return False
+    
     env = os.environ.copy()
     env.update({
         'SOURCE_SCHEMA_REGISTRY_URL': 'http://localhost:38081',
@@ -936,8 +1121,15 @@ def run_id_collision_without_cleanup() -> bool:
             text=True
         )
         if result.returncode == 1:  # Expected failure due to ID collision
-            logger.info("ID collision without cleanup test passed (expected failure)")
-            return True
+            # Check that the error message mentions ID collisions
+            if "ID COLLISIONS DETECTED" in result.stdout or "ID COLLISIONS DETECTED" in result.stderr:
+                logger.info("ID collision without cleanup test passed (expected failure)")
+                return True
+            else:
+                logger.error("ID collision without cleanup test failed - no collision error message")
+                logger.error(f"Output: {result.stdout}")
+                logger.error(f"Error: {result.stderr}")
+                return False
         else:
             logger.error("ID collision without cleanup test failed (unexpected success)")
             logger.error(f"Output: {result.stdout}")
@@ -1806,6 +1998,10 @@ def test_set_mode_for_all_subjects_unit() -> bool:
             
         logger.info("Function handles empty registry correctly")
         
+        # Reset global mode to READWRITE to avoid affecting other tests
+        client.set_global_mode('READWRITE')
+        logger.info("Reset global mode to READWRITE for other tests")
+        
         return True
         
     except Exception as e:
@@ -1971,6 +2167,174 @@ def run_mode_after_migration_test() -> bool:
         logger.error(f"Mode after migration test failed: {e}")
         return False
 
+class TestMigration(unittest.TestCase):
+    def setUp(self):
+        self.source_client = SchemaRegistryClient(url='http://localhost:38081')
+        self.dest_client = SchemaRegistryClient(url='http://localhost:38082')
+    
+    def test_cleanup_specific_subjects(self):
+        """Test selective subject cleanup."""
+        # Ensure we start with a clean state and READWRITE mode
+        try:
+            # Clean up any existing test subjects
+            existing_subjects = self.dest_client.get_subjects()
+            test_subjects = ['test-subject-1', 'test-subject-2', 'test-subject-3', 'test-subject-keep']
+            for subject in test_subjects:
+                if subject in existing_subjects:
+                    try:
+                        self.dest_client.session.delete(f"{self.dest_client.url}/subjects/{subject}?permanent=true")
+                    except:
+                        pass
+            
+            # Ensure global mode is READWRITE
+            self.dest_client.set_global_mode('READWRITE')
+        except:
+            pass  # Ignore errors during cleanup
+        
+        # Create test subjects
+        subjects_to_create = ['test-subject-1', 'test-subject-2', 'test-subject-3', 'test-subject-keep']
+        
+        for subject in subjects_to_create:
+            schema = {
+                "type": "record",
+                "name": f"Test{subject.replace('-', '')}",
+                "fields": [{"name": "field1", "type": "string"}]
+            }
+            self.dest_client.register_schema(subject, json.dumps(schema))
+        
+        # Verify all subjects exist
+        all_subjects = self.dest_client.get_subjects()
+        logger.info(f"Subjects after creation: {sorted(all_subjects)}")
+        for subject in subjects_to_create:
+            self.assertIn(subject, all_subjects)
+        
+        # Clean up specific subjects
+        subjects_to_clean = ['test-subject-1', 'test-subject-2', 'test-subject-3']
+        logger.info(f"Attempting to clean up subjects: {subjects_to_clean}")
+        cleanup_specific_subjects(self.dest_client, subjects_to_clean, permanent=True)
+        
+        # Wait a bit for deletion to complete
+        import time
+        time.sleep(1)
+        
+        # Verify only specified subjects were deleted
+        remaining_subjects = self.dest_client.get_subjects()
+        logger.info(f"Subjects after cleanup: {sorted(remaining_subjects)}")
+        
+        # Check which subjects were actually deleted
+        deleted_subjects = []
+        still_present = []
+        for subject in subjects_to_clean:
+            if subject not in remaining_subjects:
+                deleted_subjects.append(subject)
+            else:
+                still_present.append(subject)
+        
+        if deleted_subjects:
+            logger.info(f"Successfully deleted: {deleted_subjects}")
+        if still_present:
+            logger.error(f"Failed to delete: {still_present}")
+        
+        for subject in subjects_to_clean:
+            self.assertNotIn(subject, remaining_subjects)
+        
+        # Verify the kept subject still exists
+        self.assertIn('test-subject-keep', remaining_subjects)
+        
+        # Clean up
+        try:
+            self.dest_client.session.delete(f"{self.dest_client.url}/subjects/test-subject-keep?permanent=true")
+        except:
+            pass
+
+    def test_compare_schema_versions(self):
+        """Test schema version comparison with detailed differences."""
+        subject = 'test-comparison'
+        
+        # Create different schemas in source and destination
+        source_schema = {
+            "type": "record",
+            "name": "TestRecord",
+            "namespace": "com.example.source",
+            "fields": [
+                {"name": "field1", "type": "string"},
+                {"name": "field2", "type": "int"},
+                {"name": "sourceOnlyField", "type": "string"}
+            ]
+        }
+        
+        dest_schema = {
+            "type": "record",
+            "name": "TestRecord",
+            "namespace": "com.example.dest",
+            "fields": [
+                {"name": "field1", "type": "string"},
+                {"name": "field2", "type": "int"},
+                {"name": "destOnlyField", "type": "long"}
+            ]
+        }
+        
+        # Register schemas
+        self.source_client.register_schema(subject, json.dumps(source_schema))
+        self.dest_client.register_schema(subject, json.dumps(dest_schema))
+        
+        # Compare versions
+        comparison = compare_schema_versions(self.source_client, self.dest_client, subject, 1)
+        
+        # Verify comparison results
+        self.assertTrue(comparison['source_exists'])
+        self.assertTrue(comparison['dest_exists'])
+        self.assertFalse(comparison['schemas_match'])
+        self.assertGreater(len(comparison['differences']), 0)
+        
+        # Check for expected differences
+        differences_str = ' '.join(comparison['differences'])
+        self.assertIn('sourceOnlyField', differences_str)
+        self.assertIn('destOnlyField', differences_str)
+        self.assertIn('namespace', differences_str.lower())
+
+def run_test_cleanup_specific_subjects() -> bool:
+    """Run the selective subject cleanup test."""
+    try:
+        test = TestMigration()
+        test.setUp()
+        
+        # Ensure destination is in READWRITE mode
+        try:
+            test.dest_client.set_global_mode('READWRITE')
+        except:
+            pass  # Ignore if mode setting fails
+            
+        test.test_cleanup_specific_subjects()
+        logger.info("Selective subject cleanup test passed")
+        return True
+    except Exception as e:
+        logger.error(f"Selective subject cleanup test failed: {e}")
+        return False
+
+def run_test_compare_schema_versions() -> bool:
+    """Run the schema version comparison test."""
+    try:
+        test = TestMigration()
+        test.setUp()
+        
+        # Ensure both registries are in READWRITE mode
+        try:
+            test.source_client.set_global_mode('READWRITE')
+        except:
+            pass  # Ignore if mode setting fails
+        try:
+            test.dest_client.set_global_mode('READWRITE')
+        except:
+            pass  # Ignore if mode setting fails
+            
+        test.test_compare_schema_versions()
+        logger.info("Schema version comparison test passed")
+        return True
+    except Exception as e:
+        logger.error(f"Schema version comparison test failed: {e}")
+        return False
+
 def main():
     """Run all tests."""
     tests = [
@@ -1994,7 +2358,9 @@ def main():
         (18, "Conflict handling test", run_conflict_handling_test),
         (19, "Permanent delete test", run_permanent_delete_test),
         (20, "Mode after migration test", run_mode_after_migration_test),
-        (21, "Global mode unit test", test_set_mode_for_all_subjects_unit)
+        (21, "Global mode unit test", test_set_mode_for_all_subjects_unit),
+        (22, "Selective subject cleanup test", run_test_cleanup_specific_subjects),
+        (23, "Schema version comparison test", run_test_compare_schema_versions)
     ]
 
     success = True

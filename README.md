@@ -210,6 +210,7 @@ docker run -it --env-file .env kafka-schema-reg-migrator bash -c "cd tests && ./
 | `DEST_CONTEXT` | Context name for destination Schema Registry | No | - |
 | `DEST_IMPORT_MODE` | Set global IMPORT mode on destination registry | No | false |
 | `CLEANUP_DESTINATION` | Delete all subjects in destination registry before migration | No | false |
+| `CLEANUP_SUBJECTS` | Comma-separated list of specific subjects to delete before migration | No | - |
 | `PRESERVE_IDS` | Preserve original schema IDs during migration (uses subject-level IMPORT mode) | No | false |
 | `RETRY_FAILED` | Automatically retry failed migrations | No | true |
 | `PERMANENT_DELETE` | Use permanent (hard) delete when cleaning up destination | No | true |
@@ -264,6 +265,37 @@ The tool handles 409 Conflict errors gracefully:
 - The tool verifies if the existing schema matches the source schema
 - Conflicts are logged and reported in the migration summary
 - This prevents duplicate schema registrations and ensures idempotent migrations
+
+### Selective Subject Cleanup
+
+You can clean up specific subjects before migration without affecting others:
+
+```bash
+# Clean up only specific subjects
+CLEANUP_SUBJECTS=subject1,subject2,subject3
+PERMANENT_DELETE=true
+```
+
+This is useful when:
+- You have version mismatches in specific subjects
+- You want to re-migrate only certain subjects
+- You need to resolve conflicts without affecting the entire registry
+
+### Enhanced Error Reporting
+
+When schema conflicts occur (409 errors), the tool now provides detailed information about the differences:
+- Field-level differences for AVRO schemas
+- Namespace and type differences
+- Clear indication of what fields exist only in source or destination
+
+Example error output:
+```
+ERROR - 409 Conflict for user-events: schema content differs from existing versions. Latest version in destination: 20
+ERROR - Schema differences for user-events version 9:
+ERROR -   - Fields only in source: newField1, newField2
+ERROR -   - Fields only in destination: oldField1
+ERROR -   - Namespace differs: source='com.example.v2', dest='com.example.v1'
+```
 
 ### Running Tests
 
