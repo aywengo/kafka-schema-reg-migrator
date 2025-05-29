@@ -31,6 +31,7 @@ docker run -e SOURCE_SCHEMA_REGISTRY_URL=http://source:8081 \
 | `CLEANUP_DESTINATION` | Delete all subjects in destination registry before migration | No | false |
 | `PRESERVE_IDS` | Preserve original schema IDs during migration | No | false |
 | `RETRY_FAILED` | Automatically retry failed migrations | No | true |
+| `PERMANENT_DELETE` | Use permanent (hard) delete when cleaning up destination | No | true |
 | `LOG_LEVEL` | Logging level (DEBUG, INFO, WARNING, ERROR) | No | INFO |
 
 ## Using Environment File
@@ -53,6 +54,7 @@ DEST_IMPORT_MODE=false
 CLEANUP_DESTINATION=false
 PRESERVE_IDS=false
 RETRY_FAILED=true
+PERMANENT_DELETE=true
 LOG_LEVEL=DEBUG
 ```
 
@@ -107,6 +109,7 @@ services:
       - CLEANUP_DESTINATION=false
       - PRESERVE_IDS=false
       - RETRY_FAILED=true
+      - PERMANENT_DELETE=true
       - LOG_LEVEL=DEBUG
 ```
 

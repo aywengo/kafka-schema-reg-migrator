@@ -164,6 +164,7 @@ DEST_IMPORT_MODE=false   # Set to true to enable import mode for destination
 CLEANUP_DESTINATION=false # Set to true to clean up destination before migration
 PRESERVE_IDS=false       # Set to true to preserve original schema IDs
 RETRY_FAILED=true        # Set to false to disable retry of failed migrations
+PERMANENT_DELETE=true    # Set to false to use soft delete when cleaning up
 ```
 
 ## Usage
@@ -210,6 +211,7 @@ docker run -it --env-file .env kafka-schema-reg-migrator bash -c "cd tests && ./
 | `CLEANUP_DESTINATION` | Delete all subjects in destination registry before migration | No | false |
 | `PRESERVE_IDS` | Preserve original schema IDs during migration | No | false |
 | `RETRY_FAILED` | Automatically retry failed migrations | No | true |
+| `PERMANENT_DELETE` | Use permanent (hard) delete when cleaning up destination | No | true |
 | `LOG_LEVEL` | Logging level (DEBUG, INFO, WARNING, ERROR) | No | INFO |
 
 ### ID Collision Handling

@@ -712,19 +712,60 @@ def display_migration_results(results: Dict[str, List[Dict]]):
                 f"Reason: {migration['reason']}"
             )
 
-def cleanup_registry(client: SchemaRegistryClient) -> None:
-    """Clean up the destination registry by deleting all subjects."""
+def cleanup_registry(client: SchemaRegistryClient, permanent: bool = True) -> None:
+    """Clean up the destination registry by deleting all subjects.
+    
+    Args:
+        client: The Schema Registry client
+        permanent: If True, permanently delete subjects (hard delete). If False, soft delete.
+    """
     try:
         subjects = client.get_subjects()
+        if not subjects:
+            logger.info("No subjects found in registry, nothing to clean up")
+            return
+            
         for subject in subjects:
             try:
-                response = client.session.delete(f"{client.url}/subjects/{subject}")
+                # First check if subject is in read-only mode and change it if needed
+                try:
+                    subject_mode = client.get_subject_mode(subject)
+                    if subject_mode != 'READWRITE':
+                        logger.info(f"Subject {subject} is in {subject_mode} mode, changing to READWRITE for deletion")
+                        client.set_subject_mode(subject, 'READWRITE')
+                except Exception as e:
+                    logger.debug(f"Could not check/change mode for {subject}: {e}")
+                
+                # Add permanent=true parameter for hard delete
+                url = f"{client.url}/subjects/{subject}"
+                if permanent:
+                    url += "?permanent=true"
+                
+                response = client.session.delete(url)
                 response.raise_for_status()
-                logger.info(f"Successfully deleted subject {subject}")
+                logger.info(f"Successfully {'permanently' if permanent else 'soft'} deleted subject {subject}")
+            except requests.exceptions.HTTPError as e:
+                if e.response.status_code == 404:
+                    logger.warning(f"Subject {subject} not found (may have been already deleted)")
+                    continue
+                elif e.response.status_code == 422:
+                    # 422 can occur when trying to permanently delete a subject that's in read-only mode
+                    # or when the subject has special protections
+                    logger.warning(f"Cannot permanently delete subject {subject} (may be protected or in read-only mode)")
+                    # Try soft delete instead
+                    try:
+                        response = client.session.delete(f"{client.url}/subjects/{subject}")
+                        response.raise_for_status()
+                        logger.info(f"Successfully soft deleted subject {subject}")
+                    except:
+                        logger.warning(f"Could not delete subject {subject}")
+                    continue
+                logger.error(f"Failed to delete subject {subject}: {e}")
+                raise
             except requests.exceptions.RequestException as e:
                 logger.error(f"Failed to delete subject {subject}: {e}")
                 raise
-        logger.info("Successfully cleaned up destination registry")
+        logger.info(f"Successfully cleaned up destination registry ({'permanent' if permanent else 'soft'} delete)")
     except requests.exceptions.RequestException as e:
         logger.error(f"Failed to clean up destination registry: {e}")
         raise
@@ -793,7 +834,8 @@ def main():
             # Clean up destination if enabled
             if cleanup_destination:
                 logger.info("\nCleaning up destination registry before migration...")
-                cleanup_registry(dest_client)
+                permanent_delete = os.getenv('PERMANENT_DELETE', 'true').lower() == 'true'
+                cleanup_registry(dest_client, permanent=permanent_delete)
                 # Refresh destination schemas after cleanup
                 dest_schemas = dest_client.get_all_schemas()
 

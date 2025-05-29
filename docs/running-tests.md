@@ -103,6 +103,7 @@ The test suite includes the following test cases:
 16. **PROTOBUF schema migration test**: Tests migration of PROTOBUF schemas
 17. **Mixed schema types test**: Tests migration with multiple schema types in one run
 18. **Conflict handling test**: Tests handling of 409 conflicts when schema already exists
+19. **Permanent delete test**: Tests permanent (hard) delete vs soft delete functionality
 
 ### Debugging
 

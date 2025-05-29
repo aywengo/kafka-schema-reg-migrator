@@ -81,6 +81,8 @@ spec:
           value: "false"
         - name: RETRY_FAILED
           value: "true"
+        - name: PERMANENT_DELETE
+          value: "true"
       restartPolicy: Never
   backoffLimit: 0
 ```
