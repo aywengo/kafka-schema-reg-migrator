@@ -76,9 +76,9 @@ flowchart TD
     CheckModeAfter -->|No| End
     SetGlobalModeAfter --> End
     
-    style CheckImportMode fill:#ffd700
-    style SetGlobalImport fill:#ffd700
-    style RetryWithCompatibility fill:#90EE90
+    style CheckImportMode stroke:#ffd700,stroke-width:3px
+    style SetGlobalImport stroke:#ffd700,stroke-width:3px
+    style RetryWithCompatibility stroke:#90EE90,stroke-width:3px
 ```
 
 ## Schema Migration Process (Per Subject)
@@ -162,9 +162,9 @@ flowchart TD
     RestoreMode --> NextSubject
     SkipSchema --> ForEachVersion
     
-    style SetSubjectImport fill:#ffd700
-    style CheckSubjectEmpty fill:#87CEEB
-    style RegisterWithID fill:#90EE90
+    style SetSubjectImport stroke:#ffd700,stroke-width:3px
+    style CheckSubjectEmpty stroke:#87CEEB,stroke-width:3px
+    style RegisterWithID stroke:#90EE90,stroke-width:3px
 ```
 
 ## Environment Variables Control Flow
@@ -199,8 +199,8 @@ graph LR
         DEST_CTX[DEST_CONTEXT]
     end
     
-    style AUTO_COMPAT fill:#90EE90
-    style DEST_IMPORT_MODE fill:#ffd700
+    style AUTO_COMPAT stroke:#90EE90,stroke-width:3px
+    style DEST_IMPORT_MODE stroke:#ffd700,stroke-width:3px
 ```
 
 ## Mode Hierarchy
@@ -325,9 +325,9 @@ graph TD
         P5 --> P6
     end
     
-    style E6 fill:#90EE90
-    style N6 fill:#ff9999
-    style P6 fill:#ffcc00
+    style E6 stroke:#90EE90,stroke-width:3px
+    style N6 stroke:#ff9999,stroke-width:3px
+    style P6 stroke:#ffcc00,stroke-width:3px
 ```
 
 ### Why This Happens:
@@ -572,7 +572,7 @@ graph TD
     S4 -.->|Same schema| D4
     S9 -.->|Different schema| D9
     
-    style M3 fill:#f96
+    style M3 stroke:#ff9999,stroke-width:3px
 ```
 
 ### Diagnosis Flow
@@ -883,10 +883,10 @@ flowchart TD
     
     MarkRetry --> StartRetry
     
-    style SetImportMode fill:#ffd700
-    style SetReadWrite fill:#87CEEB
-    style SetNone fill:#90EE90
-    style RetryMigrations fill:#87CEEB
+    style SetImportMode stroke:#ffd700,stroke-width:3px
+    style SetReadWrite stroke:#87CEEB,stroke-width:3px
+    style SetNone stroke:#90EE90,stroke-width:3px
+    style RetryMigrations stroke:#87CEEB,stroke-width:3px
 ```
 
 ### Key Features of Enhanced Retry:
@@ -1022,7 +1022,7 @@ flowchart TD
     Post2 -->|Yes| Post3
     Post3 --> End3
     
-    style Mode3 fill:#ffd700
-    style Compat2 fill:#90EE90
-    style Clean1 fill:#ffcccc
+    style Mode3 stroke:#ffd700,stroke-width:3px
+    style Compat2 stroke:#90EE90,stroke-width:3px
+    style Clean1 stroke:#ffcccc,stroke-width:3px
 ```
