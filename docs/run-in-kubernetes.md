@@ -83,6 +83,8 @@ spec:
           value: "true"
         - name: PERMANENT_DELETE
           value: "true"
+        - name: AUTO_HANDLE_COMPATIBILITY
+          value: "true"
       restartPolicy: Never
   backoffLimit: 0
 ```
@@ -161,6 +163,8 @@ spec:
           value: "false"
         - name: RETRY_FAILED
           value: "true"
+        - name: AUTO_HANDLE_COMPATIBILITY
+          value: "true"
       restartPolicy: Never
   backoffLimit: 0
-``` 
+```

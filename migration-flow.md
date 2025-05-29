@@ -6,22 +6,34 @@
 flowchart TD
     Start([Start Migration])
     
-    %% Global Mode Setup
-    CheckImportMode{DEST_IMPORT_MODE=true?}
-    SetGlobalImport[Set Global Mode to IMPORT]
+    %% Initial Comparison
+    GetSchemas[Get schemas from both registries]
+    CompareSchemas[Compare schemas and detect collisions]
+    
+    %% Migration Check
+    CheckMigration{ENABLE_MIGRATION=true?}
+    CompareOnly[Display comparison results only]
     
     %% Cleanup Phase
     CheckCleanup{CLEANUP_DESTINATION=true?}
-    CleanupDest[Clean Destination Registry]
-    
-    %% Migration Phase
-    CheckMigration{ENABLE_MIGRATION=true?}
-    CompareOnly[Compare Schemas Only]
+    CleanupDest[Clean entire destination registry]
+    CheckCleanupSubjects{CLEANUP_SUBJECTS set?}
+    CleanupSpecific[Clean specific subjects only]
     
     %% Dry Run Check
     CheckDryRun{DRY_RUN=true?}
+    
+    %% Import Mode Setup (after cleanup, only if not dry run)
+    CheckImportMode{DEST_IMPORT_MODE=true?}
+    SetGlobalImport[Set Global Mode to IMPORT]
+    
+    %% Migration Execution
     DryRunMigration[Simulate Migration]
-    ActualMigration[Perform Migration]
+    ActualMigration[Perform Migration with ID preservation]
+    
+    %% Compatibility Handling
+    CheckCompatibility{AUTO_HANDLE_COMPATIBILITY=true?}
+    RetryWithCompatibility[Retry failed subjects with<br/>compatibility set to NONE]
     
     %% Post Migration
     CheckModeAfter{DEST_MODE_AFTER_MIGRATION set?}
@@ -30,27 +42,43 @@ flowchart TD
     End([End])
     
     %% Flow
-    Start --> CheckImportMode
-    CheckImportMode -->|Yes| SetGlobalImport
-    CheckImportMode -->|No| CheckCleanup
-    SetGlobalImport --> CheckCleanup
-    
-    CheckCleanup -->|Yes| CleanupDest
-    CheckCleanup -->|No| CheckMigration
-    CleanupDest --> CheckMigration
+    Start --> GetSchemas
+    GetSchemas --> CompareSchemas
+    CompareSchemas --> CheckMigration
     
     CheckMigration -->|No| CompareOnly
-    CheckMigration -->|Yes| CheckDryRun
+    CheckMigration -->|Yes| CheckCleanup
     CompareOnly --> End
     
+    CheckCleanup -->|Yes| CleanupDest
+    CheckCleanup -->|No| CheckCleanupSubjects
+    CleanupDest --> CheckDryRun
+    
+    CheckCleanupSubjects -->|Yes| CleanupSpecific
+    CheckCleanupSubjects -->|No| CheckDryRun
+    CleanupSpecific --> CheckDryRun
+    
     CheckDryRun -->|Yes| DryRunMigration
-    CheckDryRun -->|No| ActualMigration
+    CheckDryRun -->|No| CheckImportMode
+    
+    CheckImportMode -->|Yes| SetGlobalImport
+    CheckImportMode -->|No| ActualMigration
+    SetGlobalImport --> ActualMigration
+    
     DryRunMigration --> End
     
-    ActualMigration --> CheckModeAfter
+    ActualMigration --> CheckCompatibility
+    CheckCompatibility -->|Yes| RetryWithCompatibility
+    CheckCompatibility -->|No| CheckModeAfter
+    RetryWithCompatibility --> CheckModeAfter
+    
     CheckModeAfter -->|Yes| SetGlobalModeAfter
     CheckModeAfter -->|No| End
     SetGlobalModeAfter --> End
+    
+    style CheckImportMode fill:#ffd700
+    style SetGlobalImport fill:#ffd700
+    style RetryWithCompatibility fill:#90EE90
 ```
 
 ## Schema Migration Process (Per Subject)
@@ -77,13 +105,19 @@ flowchart TD
     RegisterWithID[Register Schema with Original ID]
     RegisterWithoutID[Register Schema without ID]
     
+    %% Error Handling
+    CheckConflict{409 Conflict Error?}
+    CheckAutoCompat{AUTO_HANDLE_COMPATIBILITY=true?}
+    MarkForRetry[Mark subject for compatibility retry]
+    LogFailure[Log failure and continue]
+    
     %% Restore Mode
     RestoreMode[Restore Original Subject Mode]
     
-    %% Retry Logic
-    CheckFailed{Migration Failed?}
-    CheckRetry{RETRY_FAILED=true?}
-    RetryMigration[Retry with Mode Changes]
+    %% Compatibility Retry Phase
+    SetCompatNone[Set subject compatibility to NONE]
+    RetryRegistration[Retry schema registration]
+    RestoreCompat[Restore original compatibility]
     
     NextSubject([Next Subject])
     
@@ -105,16 +139,29 @@ flowchart TD
     CheckReadOnly -->|No| RegisterWithoutID
     SetReadWrite --> RegisterWithoutID
     
-    RegisterWithID --> RestoreMode
-    RegisterWithoutID --> RestoreMode
+    RegisterWithID --> CheckConflict
+    RegisterWithoutID --> CheckConflict
     
-    RestoreMode --> CheckFailed
-    CheckFailed -->|Yes| CheckRetry
-    CheckFailed -->|No| NextSubject
+    CheckConflict -->|No| RestoreMode
+    CheckConflict -->|Yes| CheckAutoCompat
     
-    CheckRetry -->|Yes| RetryMigration
-    CheckRetry -->|No| NextSubject
-    RetryMigration --> NextSubject
+    CheckAutoCompat -->|Yes| MarkForRetry
+    CheckAutoCompat -->|No| LogFailure
+    
+    MarkForRetry --> RestoreMode
+    LogFailure --> RestoreMode
+    
+    RestoreMode --> NextSubject
+    
+    %% Retry phase (happens after all subjects processed)
+    MarkForRetry -.->|After all subjects| SetCompatNone
+    SetCompatNone --> RetryRegistration
+    RetryRegistration --> RestoreCompat
+    RestoreCompat --> NextSubject
+    
+    style CheckConflict fill:#ff9999
+    style CheckAutoCompat fill:#90EE90
+    style SetCompatNone fill:#90EE90
 ```
 
 ## Environment Variables Control Flow
@@ -122,19 +169,21 @@ flowchart TD
 ```mermaid
 graph LR
     subgraph "Global Registry Settings"
-        DEST_IMPORT_MODE[DEST_IMPORT_MODE<br/>Sets global IMPORT mode]
+        DEST_IMPORT_MODE[DEST_IMPORT_MODE<br/>Sets global IMPORT mode<br/>AFTER cleanup]
         DEST_MODE_AFTER[DEST_MODE_AFTER_MIGRATION<br/>Sets global mode after migration]
     end
     
     subgraph "Migration Control"
         ENABLE_MIGRATION[ENABLE_MIGRATION<br/>Enable/disable migration]
         DRY_RUN[DRY_RUN<br/>Simulate without changes]
-        CLEANUP_DEST[CLEANUP_DESTINATION<br/>Clean before migration]
+        CLEANUP_DEST[CLEANUP_DESTINATION<br/>Clean entire registry]
+        CLEANUP_SUBJ[CLEANUP_SUBJECTS<br/>Clean specific subjects]
     end
     
     subgraph "Schema Registration"
         PRESERVE_IDS[PRESERVE_IDS<br/>Use subject-level IMPORT]
         RETRY_FAILED[RETRY_FAILED<br/>Retry failed migrations]
+        AUTO_COMPAT[AUTO_HANDLE_COMPATIBILITY<br/>Auto-resolve compatibility issues]
     end
     
     subgraph "Authentication"
@@ -146,6 +195,9 @@ graph LR
         SOURCE_CTX[SOURCE_CONTEXT]
         DEST_CTX[DEST_CONTEXT]
     end
+    
+    style AUTO_COMPAT fill:#90EE90
+    style DEST_IMPORT_MODE fill:#ffd700
 ```
 
 ## Mode Hierarchy
@@ -614,4 +666,167 @@ export ENABLE_MIGRATION=true
 export DRY_RUN=false
 
 python schema_registry_migrator.py
+```
+
+## Compatibility Handling Flow
+
+```mermaid
+sequenceDiagram
+    participant M as Migrator
+    participant S as Subject
+    participant R as Registry
+    
+    Note over M,R: AUTO_HANDLE_COMPATIBILITY=true
+    
+    %% First Pass - Normal Migration
+    rect rgb(255, 230, 230)
+        Note over M,R: First Pass: Normal Migration
+        M->>R: Register schema version
+        R-->>M: 409 Conflict (compatibility error)
+        M->>M: Mark subject for retry
+        M->>M: Continue with next version/subject
+    end
+    
+    %% After all subjects processed
+    rect rgb(230, 255, 230)
+        Note over M,R: Retry Phase: Compatibility Disabled
+        M->>R: GET /config/{subject}
+        R-->>M: Current compatibility or null
+        M->>M: Store original compatibility
+        
+        M->>R: PUT /config/{subject}
+        Note right of M: {"compatibility": "NONE"}
+        R-->>M: 200 OK
+        
+        loop For each failed version
+            M->>R: Register schema version
+            R-->>M: 200 OK (success)
+        end
+        
+        alt Subject had specific compatibility
+            M->>R: PUT /config/{subject}
+            Note right of M: {"compatibility": "original_value"}
+            R-->>M: 200 OK
+        else Subject used global compatibility
+            M->>R: DELETE /config/{subject}
+            Note right of M: Remove subject-level config
+            R-->>M: 200 OK
+        end
+    end
+```
+
+## Key Points About Schema Ordering
+
+```mermaid
+graph LR
+    subgraph "Why Version Order Matters"
+        A[Schema Evolution]
+        A --> B[v1: Base schema]
+        B --> C[v2: Add optional field]
+        C --> D[v3: Add another field]
+        
+        E[Must register in order<br/>to maintain compatibility]
+    end
+    
+    subgraph "What Happens Without Order"
+        F[Try to register v3 first]
+        F --> G[Compatibility check fails]
+        G --> H[No previous version exists]
+    end
+    
+    subgraph "ID vs Version"
+        I[Schema IDs are global]
+        J[Version numbers are per-subject]
+        K[Sort by version, preserve IDs]
+    end
+```
+
+## Complete Execution Order
+
+```mermaid
+flowchart TD
+    subgraph "1. Initialization"
+        Init1[Load environment variables]
+        Init2[Create source & dest clients]
+        Init3[Get schemas from both registries]
+    end
+    
+    subgraph "2. Comparison Phase"
+        Comp1[Compare all schemas]
+        Comp2[Detect ID collisions]
+        Comp3[Display comparison results]
+    end
+    
+    subgraph "3. Pre-Migration Checks"
+        Check1{ENABLE_MIGRATION=true?}
+        Check2{ID collisions exist?}
+        Check3{CLEANUP_DESTINATION=true?}
+    end
+    
+    subgraph "4. Cleanup Phase"
+        Clean1[Clean entire destination<br/>if CLEANUP_DESTINATION=true]
+        Clean2[Clean specific subjects<br/>if CLEANUP_SUBJECTS set]
+        Clean3[Refresh destination schemas]
+    end
+    
+    subgraph "5. Mode Setup"
+        Mode1{DRY_RUN=false?}
+        Mode2{DEST_IMPORT_MODE=true?}
+        Mode3[Set global IMPORT mode]
+    end
+    
+    subgraph "6. Migration Execution"
+        Mig1[Sort subjects]
+        Mig2[For each subject:<br/>- Sort versions by number<br/>- Check if exists<br/>- Set subject IMPORT if needed<br/>- Register schema<br/>- Handle 409 conflicts]
+    end
+    
+    subgraph "7. Compatibility Retry"
+        Compat1{AUTO_HANDLE_COMPATIBILITY=true<br/>AND failures exist?}
+        Compat2[For each failed subject:<br/>- Set compatibility to NONE<br/>- Retry all failed versions<br/>- Restore original compatibility]
+    end
+    
+    subgraph "8. Post-Migration"
+        Post1[Validate migration results]
+        Post2{DEST_MODE_AFTER_MIGRATION set?}
+        Post3[Set global mode to specified value]
+    end
+    
+    %% Flow connections
+    Init1 --> Init2 --> Init3
+    Init3 --> Comp1 --> Comp2 --> Comp3
+    Comp3 --> Check1
+    
+    Check1 -->|No| End1([End - Comparison Only])
+    Check1 -->|Yes| Check2
+    
+    Check2 -->|Yes| Check3
+    Check2 -->|No| Clean2
+    Check3 -->|No| End2([End - Cannot proceed])
+    Check3 -->|Yes| Clean1
+    
+    Clean1 --> Clean3
+    Clean2 --> Clean3
+    Clean3 --> Mode1
+    
+    Mode1 -->|No| Mig1
+    Mode1 -->|Yes| Mode2
+    Mode2 -->|No| Mig1
+    Mode2 -->|Yes| Mode3
+    Mode3 --> Mig1
+    
+    Mig1 --> Mig2
+    Mig2 --> Compat1
+    
+    Compat1 -->|No| Post1
+    Compat1 -->|Yes| Compat2
+    Compat2 --> Post1
+    
+    Post1 --> Post2
+    Post2 -->|No| End3([End - Success])
+    Post2 -->|Yes| Post3
+    Post3 --> End3
+    
+    style Mode3 fill:#ffd700
+    style Compat2 fill:#90EE90
+    style Clean1 fill:#ffcccc
 ```

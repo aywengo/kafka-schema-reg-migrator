@@ -104,6 +104,7 @@ The test suite includes the following test cases:
 17. **Mixed schema types test**: Tests migration with multiple schema types in one run
 18. **Conflict handling test**: Tests handling of 409 conflicts when schema already exists
 19. **Permanent delete test**: Tests permanent (hard) delete vs soft delete functionality
+20. **Auto compatibility handling test**: Tests automatic compatibility issue resolution with AUTO_HANDLE_COMPATIBILITY
 
 ### Debugging
 

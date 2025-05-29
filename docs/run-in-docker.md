@@ -34,6 +34,7 @@ docker run -e SOURCE_SCHEMA_REGISTRY_URL=http://source:8081 \
 | `RETRY_FAILED` | Automatically retry failed migrations | No | true |
 | `PERMANENT_DELETE` | Use permanent (hard) delete when cleaning up destination | No | true |
 | `DEST_MODE_AFTER_MIGRATION` | Global mode to set after migration (READWRITE, READONLY, READWRITE_OVERRIDE) | No | READWRITE |
+| `AUTO_HANDLE_COMPATIBILITY` | Automatically handle compatibility issues during migration | No | true |
 | `LOG_LEVEL` | Logging level (DEBUG, INFO, WARNING, ERROR) | No | INFO |
 
 ## Using Environment File
@@ -59,6 +60,7 @@ PRESERVE_IDS=false
 RETRY_FAILED=true
 PERMANENT_DELETE=true
 DEST_MODE_AFTER_MIGRATION=READWRITE
+AUTO_HANDLE_COMPATIBILITY=true
 LOG_LEVEL=DEBUG
 ```
 
@@ -74,6 +76,8 @@ Schema Registry supports two types of import modes:
 ### Global Import Mode (`DEST_IMPORT_MODE`)
 
 The `DEST_IMPORT_MODE` setting enables global IMPORT mode on the destination registry. This affects all operations on the registry.
+
+**Important**: When used with `CLEANUP_DESTINATION=true`, the global IMPORT mode is set **after** the cleanup operation completes. This ensures the registry is empty before enabling IMPORT mode, which is a requirement for some Schema Registry implementations.
 
 ### Subject-Level Import Mode (`PRESERVE_IDS`)
 
@@ -96,6 +100,36 @@ ENABLE_MIGRATION=true
 PRESERVE_IDS=true  # Uses subject-level IMPORT mode for each subject
 CLEANUP_DESTINATION=true  # Recommended to ensure subjects are empty
 ```
+
+## Compatibility Handling
+
+The `AUTO_HANDLE_COMPATIBILITY` feature (enabled by default) automatically resolves schema compatibility issues during migration:
+
+### How it works:
+
+1. **Detection**: When a schema migration fails with a 409 Conflict due to compatibility issues
+2. **Automatic Retry**: The tool will:
+   - Remember which subjects had compatibility issues
+   - After the first pass, temporarily set compatibility to `NONE` for those subjects
+   - Retry the migration for all failed versions
+   - Restore the original compatibility settings
+
+### Configuration:
+
+```bash
+# Enable automatic compatibility handling (default)
+AUTO_HANDLE_COMPATIBILITY=true
+
+# Disable if you want to handle compatibility manually
+AUTO_HANDLE_COMPATIBILITY=false
+```
+
+### Benefits:
+
+- No manual intervention required for compatibility issues
+- Original compatibility settings are preserved and restored
+- Only affects subjects that actually have compatibility problems
+- Handles cases where schemas evolved in incompatible ways
 
 ## Example with Docker Compose
 
@@ -122,6 +156,7 @@ services:
       - RETRY_FAILED=true
       - PERMANENT_DELETE=true
       - DEST_MODE_AFTER_MIGRATION=READWRITE
+      - AUTO_HANDLE_COMPATIBILITY=true
       - LOG_LEVEL=DEBUG
 ```
 
