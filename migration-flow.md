@@ -87,17 +87,22 @@ flowchart TD
 flowchart TD
     StartSubject([Process Subject])
     
-    %% Check if schema exists
+    %% Check if subject is empty for ID preservation
+    CheckPreserveID{PRESERVE_IDS=true?}
+    CheckSubjectEmpty{Subject empty/non-existent?}
+    SetSubjectImport[Set Subject to IMPORT mode<br/>for ALL versions]
+    SkipIDPreservation[Continue without ID preservation]
+    
+    %% Process versions
+    ProcessVersions[Process all versions in order]
+    
+    %% For each version
+    ForEachVersion[For each version]
     CheckExists{Schema already exists?}
     SkipSchema[Skip Schema]
     
-    %% ID Preservation
-    CheckPreserveID{PRESERVE_IDS=true?}
-    CheckSubjectEmpty{Subject empty/non-existent?}
-    SetSubjectImport[Set Subject to IMPORT mode]
-    SkipIDPreservation[Continue without ID preservation]
-    
-    %% Mode Handling
+    %% Mode Handling (only if not in IMPORT)
+    CheckImportMode{In IMPORT mode?}
     CheckReadOnly{Subject in READONLY?}
     SetReadWrite[Set Subject to READWRITE]
     
@@ -114,26 +119,26 @@ flowchart TD
     %% Restore Mode
     RestoreMode[Restore Original Subject Mode]
     
-    %% Compatibility Retry Phase
-    SetCompatNone[Set subject compatibility to NONE]
-    RetryRegistration[Retry schema registration]
-    RestoreCompat[Restore original compatibility]
-    
     NextSubject([Next Subject])
     
     %% Flow
-    StartSubject --> CheckExists
-    CheckExists -->|Yes| SkipSchema
-    CheckExists -->|No| CheckPreserveID
-    SkipSchema --> NextSubject
-    
+    StartSubject --> CheckPreserveID
     CheckPreserveID -->|Yes| CheckSubjectEmpty
-    CheckPreserveID -->|No| CheckReadOnly
+    CheckPreserveID -->|No| ProcessVersions
     
     CheckSubjectEmpty -->|Yes| SetSubjectImport
     CheckSubjectEmpty -->|No| SkipIDPreservation
-    SetSubjectImport --> RegisterWithID
-    SkipIDPreservation --> CheckReadOnly
+    SetSubjectImport --> ProcessVersions
+    SkipIDPreservation --> ProcessVersions
+    
+    ProcessVersions --> ForEachVersion
+    ForEachVersion --> CheckExists
+    
+    CheckExists -->|Yes| SkipSchema
+    CheckExists -->|No| CheckImportMode
+    
+    CheckImportMode -->|Yes| RegisterWithID
+    CheckImportMode -->|No| CheckReadOnly
     
     CheckReadOnly -->|Yes| SetReadWrite
     CheckReadOnly -->|No| RegisterWithoutID
@@ -142,26 +147,24 @@ flowchart TD
     RegisterWithID --> CheckConflict
     RegisterWithoutID --> CheckConflict
     
-    CheckConflict -->|No| RestoreMode
+    CheckConflict -->|No| ForEachVersion
     CheckConflict -->|Yes| CheckAutoCompat
     
     CheckAutoCompat -->|Yes| MarkForRetry
     CheckAutoCompat -->|No| LogFailure
     
-    MarkForRetry --> RestoreMode
-    LogFailure --> RestoreMode
+    MarkForRetry --> ForEachVersion
+    LogFailure --> ForEachVersion
+    
+    ForEachVersion -->|More versions| ForEachVersion
+    ForEachVersion -->|No more versions| RestoreMode
     
     RestoreMode --> NextSubject
+    SkipSchema --> ForEachVersion
     
-    %% Retry phase (happens after all subjects processed)
-    MarkForRetry -.->|After all subjects| SetCompatNone
-    SetCompatNone --> RetryRegistration
-    RetryRegistration --> RestoreCompat
-    RestoreCompat --> NextSubject
-    
-    style CheckConflict fill:#ff9999
-    style CheckAutoCompat fill:#90EE90
-    style SetCompatNone fill:#90EE90
+    style SetSubjectImport fill:#ffd700
+    style CheckSubjectEmpty fill:#87CEEB
+    style RegisterWithID fill:#90EE90
 ```
 
 ## Environment Variables Control Flow
@@ -241,24 +244,104 @@ sequenceDiagram
     
     M->>S: Check if subject exists
     alt Subject is empty/non-existent
-        M->>S: Set mode to IMPORT
+        M->>S: Set mode to IMPORT (once for all versions)
         S->>R: PUT /mode/{subject} {"mode": "IMPORT"}
         R-->>S: 200 OK
         
-        M->>R: Register schema with ID
-        Note right of M: POST /subjects/{subject}/versions<br/>{"schema": "...", "id": 24}
-        R-->>M: 200 OK {"id": 24}
+        Note over M,R: Process ALL versions while in IMPORT mode
+        
+        loop For each version in order
+            M->>R: Register schema with ID
+            Note right of M: POST /subjects/{subject}/versions<br/>{"schema": "...", "id": originalId}
+            R-->>M: 200 OK {"id": originalId}
+        end
         
         M->>S: Restore original mode
         S->>R: PUT /mode/{subject} {"mode": "READWRITE"}
         R-->>S: 200 OK
     else Subject has existing schemas
+        Note over M,R: Cannot set IMPORT mode on non-empty subject
         M->>M: Skip ID preservation
-        M->>R: Register schema without ID
-        Note right of M: POST /subjects/{subject}/versions<br/>{"schema": "..."}
-        R-->>M: 200 OK {"id": auto-generated}
+        loop For each version
+            M->>R: Register schema without ID
+            Note right of M: POST /subjects/{subject}/versions<br/>{"schema": "..."}
+            R-->>M: 200 OK {"id": auto-generated}
+        end
     end
 ```
+
+### Key Points:
+- **IMPORT mode can only be set on empty subjects**
+- **Once set, IMPORT mode must be maintained for ALL versions**
+- **Cannot switch to IMPORT mode after any schema is registered**
+- **All versions must be registered in a single IMPORT session**
+
+## IMPORT Mode Limitations and Behavior
+
+```mermaid
+graph TD
+    subgraph "Empty Subject"
+        E1[Subject has no schemas]
+        E2[Can set IMPORT mode ✓]
+        E3[Register v1 with ID 886]
+        E4[Register v2 with ID 949]
+        E5[Register v3 with ID 1022]
+        E6[All IDs preserved ✓]
+        
+        E1 --> E2
+        E2 --> E3
+        E3 --> E4
+        E4 --> E5
+        E5 --> E6
+    end
+    
+    subgraph "Non-Empty Subject"
+        N1[Subject has schemas]
+        N2[Cannot set IMPORT mode ✗]
+        N3[Register v1 → ID 100501]
+        N4[Register v2 → ID 100502]
+        N5[Register v3 → ID 100503]
+        N6[Auto-generated IDs ✗]
+        
+        N1 --> N2
+        N2 --> N3
+        N3 --> N4
+        N4 --> N5
+        N5 --> N6
+    end
+    
+    subgraph "Partial IMPORT (Wrong Approach)"
+        P1[Set IMPORT mode]
+        P2[Register v1 with ID 886 ✓]
+        P3[Try to set IMPORT for v2]
+        P4[422 Error - Subject not empty]
+        P5[Register v2 → ID 100502 ✗]
+        P6[Mixed IDs - Inconsistent]
+        
+        P1 --> P2
+        P2 --> P3
+        P3 --> P4
+        P4 --> P5
+        P5 --> P6
+    end
+    
+    style E6 fill:#90EE90
+    style N6 fill:#ff9999
+    style P6 fill:#ffcc00
+```
+
+### Why This Happens:
+
+1. **IMPORT mode is a subject-level setting** that affects how the registry handles schema registration
+2. **Once a subject has any schema**, it's no longer considered "empty"
+3. **The 422 error** occurs because the registry enforces this rule strictly
+4. **Solution**: Set IMPORT mode once before registering ANY schemas, then register ALL versions
+
+### Best Practices:
+
+- Always check if a subject is empty before attempting ID preservation
+- If migrating to a non-empty registry, consider using `CLEANUP_SUBJECTS` for specific subjects
+- Plan your migration strategy based on whether subjects exist in the destination
 
 ## Schema-Level Migration Flow (Within a Subject)
 
@@ -689,7 +772,17 @@ sequenceDiagram
     
     %% After all subjects processed
     rect rgb(230, 255, 230)
-        Note over M,R: Retry Phase: Compatibility Disabled
+        Note over M,R: Retry Phase: Mode & Compatibility Handling
+        M->>R: GET /mode/{subject}
+        R-->>M: Current mode (might be READONLY)
+        M->>M: Store original mode
+        
+        alt Subject not in READWRITE mode
+            M->>R: PUT /mode/{subject}
+            Note right of M: {"mode": "READWRITE"}
+            R-->>M: 200 OK
+        end
+        
         M->>R: GET /config/{subject}
         R-->>M: Current compatibility or null
         M->>M: Store original compatibility
@@ -703,6 +796,13 @@ sequenceDiagram
             R-->>M: 200 OK (success)
         end
         
+        %% Restore original settings
+        alt Subject had specific mode
+            M->>R: PUT /mode/{subject}
+            Note right of M: {"mode": "original_mode"}
+            R-->>M: 200 OK
+        end
+        
         alt Subject had specific compatibility
             M->>R: PUT /config/{subject}
             Note right of M: {"compatibility": "original_value"}
@@ -714,6 +814,102 @@ sequenceDiagram
         end
     end
 ```
+
+## Enhanced Retry Mechanism
+
+```mermaid
+flowchart TD
+    subgraph "Initial Migration Attempt"
+        Try1[Try to register schema]
+        Fail1{Failed?}
+        Error1[Check error type]
+        
+        Try1 --> Fail1
+        Fail1 -->|Yes| Error1
+        Fail1 -->|No| Success1[Success]
+        
+        Error1 -->|409 Conflict| MarkRetry[Mark for compatibility retry]
+        Error1 -->|422 Not in write mode| MarkRetry
+        Error1 -->|Other| LogError[Log error]
+    end
+    
+    subgraph "Retry Phase (Per Subject)"
+        StartRetry[Start retry for subject]
+        
+        %% ID Preservation check
+        CheckEmpty[Check if subject is empty]
+        CanPreserveIDs{Empty & PRESERVE_IDS=true?}
+        SetImportMode[Set IMPORT mode for all versions]
+        
+        %% Mode handling
+        CheckMode[Get current mode]
+        IsReadWrite{Mode = READWRITE?}
+        SetReadWrite[Set mode to READWRITE]
+        StoreMode[Store original mode]
+        
+        %% Compatibility handling
+        CheckCompat[Get current compatibility]
+        SetNone[Set compatibility to NONE]
+        StoreCompat[Store original compatibility]
+        
+        %% Retry migrations
+        RetryMigrations[Retry all failed versions<br/>with or without IDs]
+        
+        %% Restore settings
+        RestoreMode[Restore original mode]
+        RestoreCompat[Restore original compatibility]
+        
+        %% Flow
+        StartRetry --> CheckEmpty
+        CheckEmpty --> CanPreserveIDs
+        CanPreserveIDs -->|Yes| SetImportMode
+        CanPreserveIDs -->|No| CheckMode
+        SetImportMode --> CheckCompat
+        
+        CheckMode --> StoreMode
+        StoreMode --> IsReadWrite
+        IsReadWrite -->|No| SetReadWrite
+        IsReadWrite -->|Yes| CheckCompat
+        SetReadWrite --> CheckCompat
+        
+        CheckCompat --> StoreCompat
+        StoreCompat --> SetNone
+        SetNone --> RetryMigrations
+        
+        RetryMigrations --> RestoreMode
+        RestoreMode --> RestoreCompat
+        RestoreCompat --> EndRetry[End retry for subject]
+    end
+    
+    MarkRetry --> StartRetry
+    
+    style SetImportMode fill:#ffd700
+    style SetReadWrite fill:#87CEEB
+    style SetNone fill:#90EE90
+    style RetryMigrations fill:#87CEEB
+```
+
+### Key Features of Enhanced Retry:
+
+1. **Handles Multiple Error Types**:
+   - 409 Conflicts (compatibility issues)
+   - 422 Errors (subject not in write mode)
+   - Other registration failures
+
+2. **Subject-Level Processing**:
+   - Groups failures by subject for efficient retry
+   - Applies mode and compatibility changes per subject
+   - Restores original settings after retry
+
+3. **Graceful Degradation**:
+   - Continues even if mode changes fail
+   - Logs warnings but doesn't stop the process
+   - Handles ID preservation fallback
+
+4. **State Management**:
+   - Stores original mode and compatibility
+   - Properly restores settings after retry
+   - Handles both subject-level and global settings
 
 ## Key Points About Schema Ordering
 
@@ -782,7 +978,7 @@ flowchart TD
     
     subgraph "7. Compatibility Retry"
         Compat1{AUTO_HANDLE_COMPATIBILITY=true<br/>AND failures exist?}
-        Compat2[For each failed subject:<br/>- Set compatibility to NONE<br/>- Retry all failed versions<br/>- Restore original compatibility]
+        Compat2[For each failed subject:<br/>- Set mode to READWRITE<br/>- Set compatibility to NONE<br/>- Retry all failed versions<br/>- Restore original mode<br/>- Restore original compatibility]
     end
     
     subgraph "8. Post-Migration"

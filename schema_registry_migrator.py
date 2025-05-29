@@ -483,10 +483,37 @@ def migrate_schemas(source_client: SchemaRegistryClient, dest_client: SchemaRegi
         # Sort versions to ensure we migrate in order
         versions.sort(key=lambda x: x['version'])
         
+        # Check if we need to preserve IDs for this subject
+        subject_preserve_ids = preserve_ids
+        subject_import_mode_set = False
+        subject_original_mode = None
+        
+        # If preserving IDs, check if subject is empty and set IMPORT mode once
+        if preserve_ids and not dry_run:
+            # Check if subject exists in destination
+            if subject not in dest_schemas or not dest_schemas[subject]:
+                # Subject is empty, we can set IMPORT mode
+                try:
+                    subject_original_mode = dest_client.get_subject_mode(subject)
+                    if subject_original_mode != 'IMPORT':
+                        logger.info(f"Setting subject {subject} to IMPORT mode for ID preservation (will process all versions)")
+                        dest_client.set_subject_mode(subject, 'IMPORT')
+                        subject_import_mode_set = True
+                except requests.exceptions.HTTPError as e:
+                    if e.response.status_code == 422:
+                        logger.warning(f"Cannot set IMPORT mode for {subject}: {e}")
+                        subject_preserve_ids = False
+                    else:
+                        raise
+            else:
+                logger.warning(f"Subject {subject} already has schemas, cannot preserve IDs")
+                subject_preserve_ids = False
+        
+        # Process all versions for this subject
         for version_info in versions:
             version = version_info['version']
             schema = version_info['schema']
-            schema_id = version_info['id'] if preserve_ids else None
+            schema_id = version_info['id'] if subject_preserve_ids else None
             schema_type = version_info.get('schemaType', 'AVRO')
             
             # Check if schema already exists in destination
@@ -515,46 +542,41 @@ def migrate_schemas(source_client: SchemaRegistryClient, dest_client: SchemaRegi
                         })
                         continue
                     
-                    # Check and update subject mode if needed
-                    subject_mode = dest_client.get_subject_mode(subject)
-                    mode_changed = False
-                    
-                    # If preserving IDs, we need to set the subject to IMPORT mode
-                    if preserve_ids and schema_id is not None:
-                        if subject_mode != 'IMPORT':
-                            logger.info(f"Setting subject {subject} to IMPORT mode for ID preservation")
-                            try:
-                                dest_client.set_subject_mode(subject, 'IMPORT')
-                                mode_changed = True
-                            except requests.exceptions.HTTPError as e:
-                                if e.response.status_code == 422:
-                                    # Subject must be empty or non-existent to set IMPORT mode
-                                    logger.warning(f"Cannot set IMPORT mode for {subject} (subject must be empty): {e}")
-                                    # Fall back to migration without ID preservation
-                                    schema_id = None
-                                    preserve_ids = False
-                                else:
-                                    raise
-                    elif subject_mode != 'READWRITE':
-                        logger.info(f"Subject {subject} is in {subject_mode} mode, changing to READWRITE")
-                        dest_client.set_subject_mode(subject, 'READWRITE')
-                        mode_changed = True
-                    
-                    try:
-                        # Register schema in destination with correct schema type
+                    # Check and update subject mode if needed (only if not in IMPORT mode already)
+                    if not subject_import_mode_set:
+                        subject_mode = dest_client.get_subject_mode(subject)
+                        mode_changed = False
+                        
+                        if subject_mode != 'READWRITE':
+                            logger.info(f"Subject {subject} is in {subject_mode} mode, changing to READWRITE")
+                            dest_client.set_subject_mode(subject, 'READWRITE')
+                            mode_changed = True
+                        
+                        try:
+                            # Register schema in destination with correct schema type
+                            result = dest_client.register_schema(subject, schema, schema_type=schema_type, schema_id=schema_id)
+                            logger.info(f"Successfully migrated {subject} version {version} (type: {schema_type})")
+                            migration_results['successful'].append({
+                                'subject': subject,
+                                'version': version,
+                                'new_id': result.get('id'),
+                                'original_id': version_info['id']
+                            })
+                        finally:
+                            # Restore original mode if it was changed
+                            if mode_changed:
+                                logger.info(f"Restoring subject {subject} mode to {subject_mode}")
+                                dest_client.set_subject_mode(subject, subject_mode)
+                    else:
+                        # We're in IMPORT mode, just register with ID
                         result = dest_client.register_schema(subject, schema, schema_type=schema_type, schema_id=schema_id)
-                        logger.info(f"Successfully migrated {subject} version {version} (type: {schema_type})")
+                        logger.info(f"Successfully migrated {subject} version {version} with ID {schema_id} (type: {schema_type})")
                         migration_results['successful'].append({
                             'subject': subject,
                             'version': version,
                             'new_id': result.get('id'),
                             'original_id': version_info['id']
                         })
-                    finally:
-                        # Restore original mode if it was changed
-                        if mode_changed:
-                            logger.info(f"Restoring subject {subject} mode to {subject_mode}")
-                            dest_client.set_subject_mode(subject, subject_mode)
                 else:
                     # In dry run mode, just check compatibility
                     is_compatible = dest_client.check_schema_compatibility(subject, schema, schema_type=schema_type)
@@ -621,6 +643,14 @@ def migrate_schemas(source_client: SchemaRegistryClient, dest_client: SchemaRegi
                     'version': version,
                     'reason': str(e)
                 })
+        
+        # After processing all versions for this subject, restore mode if needed
+        if subject_import_mode_set and subject_original_mode:
+            try:
+                logger.info(f"Restoring subject {subject} mode from IMPORT to {subject_original_mode}")
+                dest_client.set_subject_mode(subject, subject_original_mode)
+            except Exception as e:
+                logger.warning(f"Could not restore mode for {subject}: {e}")
 
     # Retry subjects that need compatibility disabled
     if not dry_run and subjects_needing_compatibility_disabled:
@@ -631,30 +661,64 @@ def migrate_schemas(source_client: SchemaRegistryClient, dest_client: SchemaRegi
             original_mode = None
             original_compatibility = None
             mode_changed = False
+            compatibility_changed = False
             
-            # Get current compatibility
-            original_compatibility = dest_client.get_subject_compatibility(subject)
-            if original_compatibility is None:
-                # No subject-level compatibility, get global
-                original_compatibility = dest_client.get_global_compatibility()
-                compatibility_was_global = True
-            else:
-                compatibility_was_global = False
+            # Check if we should preserve IDs for this subject
+            subject_preserve_ids = preserve_ids
+            subject_import_mode_set = False
             
             try:
-                # First ensure subject is in READWRITE mode
-                try:
-                    original_mode = dest_client.get_subject_mode(subject)
-                    if original_mode != 'READWRITE':
-                        logger.info(f"Setting subject {subject} to READWRITE mode (was {original_mode})")
-                        dest_client.set_subject_mode(subject, 'READWRITE')
-                        mode_changed = True
-                except Exception as e:
-                    logger.warning(f"Could not get/set mode for {subject}: {e}")
+                # If preserving IDs, check if subject is empty and set IMPORT mode once
+                if preserve_ids:
+                    # Check if subject is empty in destination
+                    dest_subject_schemas = dest_client.get_subject_schemas(subject)
+                    if not dest_subject_schemas:
+                        # Subject is empty, we can set IMPORT mode
+                        try:
+                            original_mode = dest_client.get_subject_mode(subject)
+                            if original_mode != 'IMPORT':
+                                logger.info(f"Setting subject {subject} to IMPORT mode for ID preservation (will process all versions)")
+                                dest_client.set_subject_mode(subject, 'IMPORT')
+                                subject_import_mode_set = True
+                                mode_changed = True
+                        except requests.exceptions.HTTPError as e:
+                            if e.response.status_code == 422:
+                                logger.warning(f"Cannot set IMPORT mode for {subject}: {e}")
+                                subject_preserve_ids = False
+                            else:
+                                raise
+                    else:
+                        logger.warning(f"Subject {subject} already has schemas, cannot preserve IDs in compatibility retry")
+                        subject_preserve_ids = False
                 
-                # Set compatibility to NONE
-                logger.info(f"Setting {subject} compatibility to NONE (was {original_compatibility})")
-                dest_client.set_subject_compatibility(subject, 'NONE')
+                # If not in IMPORT mode, ensure subject is in READWRITE mode
+                if not subject_import_mode_set:
+                    try:
+                        if not original_mode:
+                            original_mode = dest_client.get_subject_mode(subject)
+                        if original_mode != 'READWRITE':
+                            logger.info(f"Setting subject {subject} to READWRITE mode (was {original_mode})")
+                            dest_client.set_subject_mode(subject, 'READWRITE')
+                            mode_changed = True
+                    except Exception as e:
+                        logger.warning(f"Could not get/set mode for {subject}: {e}")
+                
+                # Set compatibility to NONE if AUTO_HANDLE_COMPATIBILITY is enabled
+                if auto_handle_compatibility:
+                    try:
+                        original_compatibility = dest_client.get_subject_compatibility(subject)
+                        if original_compatibility is None:
+                            # No subject-level compatibility, get global
+                            original_compatibility = dest_client.get_global_compatibility()
+                            compatibility_was_global = True
+                        else:
+                            compatibility_was_global = False
+                        
+                        logger.info(f"Setting {subject} compatibility to NONE (was {original_compatibility})")
+                        dest_client.set_subject_compatibility(subject, 'NONE')
+                        compatibility_changed = True
+                    except Exception as e:
+                        logger.warning(f"Could not set compatibility for {subject}: {e}")
                 
                 # Retry migration for this subject
                 subject_versions = source_schemas[subject]
@@ -663,7 +727,7 @@ def migrate_schemas(source_client: SchemaRegistryClient, dest_client: SchemaRegi
                 for version_info in subject_versions:
                     version = version_info['version']
                     schema = version_info['schema']
-                    schema_id = version_info['id'] if preserve_ids else None
+                    schema_id = version_info['id'] if subject_preserve_ids else None
                     schema_type = version_info.get('schemaType', 'AVRO')
                     
                     # Skip if already successful
@@ -686,46 +750,21 @@ def migrate_schemas(source_client: SchemaRegistryClient, dest_client: SchemaRegi
                             })
                             continue
                         
-                        # For ID preservation, set IMPORT mode if needed
-                        import_mode_set = False
-                        if preserve_ids and schema_id is not None:
-                            try:
-                                # Get current mode
-                                current_mode = dest_client.get_subject_mode(subject)
-                                if current_mode != 'IMPORT':
-                                    logger.info(f"Setting subject {subject} to IMPORT mode for ID preservation")
-                                    dest_client.set_subject_mode(subject, 'IMPORT')
-                                    import_mode_set = True
-                            except requests.exceptions.HTTPError as e:
-                                if e.response.status_code == 422:
-                                    logger.warning(f"Cannot set IMPORT mode for {subject}: {e}")
-                                    schema_id = None
-                                else:
-                                    raise
+                        # Register schema
+                        result = dest_client.register_schema(subject, schema, schema_type=schema_type, schema_id=schema_id)
+                        logger.info(f"Successfully migrated {subject} version {version} with compatibility disabled" +
+                                   (f" and ID {schema_id}" if schema_id else ""))
                         
-                        try:
-                            # Register schema
-                            result = dest_client.register_schema(subject, schema, schema_type=schema_type, schema_id=schema_id)
-                            logger.info(f"Successfully migrated {subject} version {version} with compatibility disabled")
-                            
-                            # Remove from failed and add to successful
-                            migration_results['failed'] = [f for f in migration_results['failed'] 
-                                                         if not (f['subject'] == subject and f['version'] == version)]
-                            migration_results['successful'].append({
-                                'subject': subject,
-                                'version': version,
-                                'new_id': result.get('id'),
-                                'original_id': version_info['id'],
-                                'compatibility_disabled': True
-                            })
-                        finally:
-                            # Restore mode if we set IMPORT
-                            if import_mode_set:
-                                try:
-                                    dest_client.set_subject_mode(subject, 'READWRITE')
-                                except Exception as e:
-                                    logger.warning(f"Could not restore mode after IMPORT: {e}")
-                                    
+                        # Remove from failed and add to successful
+                        migration_results['failed'] = [f for f in migration_results['failed'] 
+                                                     if not (f['subject'] == subject and f['version'] == version)]
+                        migration_results['successful'].append({
+                            'subject': subject,
+                            'version': version,
+                            'new_id': result.get('id'),
+                            'original_id': version_info['id'],
+                            'compatibility_disabled': True
+                        })
                     except Exception as e:
                         logger.error(f"Failed to migrate {subject} version {version} even with compatibility disabled: {e}")
                         # Update the failure reason
@@ -735,7 +774,7 @@ def migrate_schemas(source_client: SchemaRegistryClient, dest_client: SchemaRegi
                                 break
                 
             finally:
-                # Restore original mode if it was changed
+                # Restore original settings
                 if mode_changed and original_mode:
                     try:
                         logger.info(f"Restoring subject {subject} mode to {original_mode}")
@@ -743,19 +782,16 @@ def migrate_schemas(source_client: SchemaRegistryClient, dest_client: SchemaRegi
                     except Exception as e:
                         logger.warning(f"Could not restore mode for {subject}: {e}")
                 
-                # Restore original compatibility
-                if compatibility_was_global:
-                    # Delete subject-level compatibility to revert to global
+                if compatibility_changed:
                     try:
-                        response = dest_client.session.delete(dest_client._get_url(f"/config/{subject}"))
-                        logger.info(f"Removed subject-level compatibility for {subject}, reverting to global")
-                    except:
-                        pass
-                else:
-                    # Restore subject-level compatibility
-                    try:
-                        dest_client.set_subject_compatibility(subject, original_compatibility)
-                        logger.info(f"Restored {subject} compatibility to {original_compatibility}")
+                        if compatibility_was_global:
+                            # Delete subject-level compatibility to revert to global
+                            response = dest_client.session.delete(dest_client._get_url(f"/config/{subject}"))
+                            logger.info(f"Removed subject-level compatibility for {subject}, reverting to global")
+                        else:
+                            # Restore subject-level compatibility
+                            dest_client.set_subject_compatibility(subject, original_compatibility)
+                            logger.info(f"Restored {subject} compatibility to {original_compatibility}")
                     except Exception as e:
                         logger.warning(f"Could not restore compatibility for {subject}: {e}")
 
@@ -799,16 +835,48 @@ def retry_failed_migrations(source_client: SchemaRegistryClient, dest_client: Sc
         mode_changed = False
         compatibility_changed = False
         
+        # Check if we should preserve IDs for this subject
+        subject_preserve_ids = preserve_ids
+        subject_import_mode_set = False
+        
+        # Sort failures by version to maintain order
+        subject_failures.sort(key=lambda x: x['version'])
+        
         try:
-            # Always set subject to READWRITE mode for retry
-            try:
-                original_mode = dest_client.get_subject_mode(subject)
-                if original_mode != 'READWRITE':
-                    logger.info(f"Setting subject {subject} to READWRITE mode (was {original_mode})")
-                    dest_client.set_subject_mode(subject, 'READWRITE')
-                    mode_changed = True
-            except Exception as e:
-                logger.warning(f"Could not get/set mode for {subject}: {e}")
+            # If preserving IDs, check if subject is empty and set IMPORT mode once
+            if preserve_ids:
+                # Check if subject is empty in destination
+                dest_subject_schemas = dest_client.get_subject_schemas(subject)
+                if not dest_subject_schemas:
+                    # Subject is empty, we can set IMPORT mode
+                    try:
+                        original_mode = dest_client.get_subject_mode(subject)
+                        if original_mode != 'IMPORT':
+                            logger.info(f"Setting subject {subject} to IMPORT mode for ID preservation (will process all versions)")
+                            dest_client.set_subject_mode(subject, 'IMPORT')
+                            subject_import_mode_set = True
+                            mode_changed = True
+                    except requests.exceptions.HTTPError as e:
+                        if e.response.status_code == 422:
+                            logger.warning(f"Cannot set IMPORT mode for {subject}: {e}")
+                            subject_preserve_ids = False
+                        else:
+                            raise
+                else:
+                    logger.warning(f"Subject {subject} already has schemas, cannot preserve IDs in retry")
+                    subject_preserve_ids = False
+            
+            # If not in IMPORT mode, ensure subject is in READWRITE mode
+            if not subject_import_mode_set:
+                try:
+                    if not original_mode:
+                        original_mode = dest_client.get_subject_mode(subject)
+                    if original_mode != 'READWRITE':
+                        logger.info(f"Setting subject {subject} to READWRITE mode (was {original_mode})")
+                        dest_client.set_subject_mode(subject, 'READWRITE')
+                        mode_changed = True
+                except Exception as e:
+                    logger.warning(f"Could not get/set mode for {subject}: {e}")
             
             # Set compatibility to NONE if AUTO_HANDLE_COMPATIBILITY is enabled
             if auto_handle_compatibility:
@@ -852,7 +920,7 @@ def retry_failed_migrations(source_client: SchemaRegistryClient, dest_client: Sc
                     continue
                 
                 schema = version_info['schema']
-                schema_id = version_info['id'] if preserve_ids else None
+                schema_id = version_info['id'] if subject_preserve_ids else None
                 schema_type = version_info.get('schemaType', 'AVRO')
                 
                 # Check if schema already exists in destination
@@ -880,40 +948,16 @@ def retry_failed_migrations(source_client: SchemaRegistryClient, dest_client: Sc
                         })
                         continue
                     
-                    # For ID preservation, set IMPORT mode if needed
-                    import_mode_set = False
-                    if preserve_ids and schema_id is not None:
-                        try:
-                            # Get current mode (might have changed)
-                            current_mode = dest_client.get_subject_mode(subject)
-                            if current_mode != 'IMPORT':
-                                logger.info(f"Setting subject {subject} to IMPORT mode for ID preservation")
-                                dest_client.set_subject_mode(subject, 'IMPORT')
-                                import_mode_set = True
-                        except requests.exceptions.HTTPError as e:
-                            if e.response.status_code == 422:
-                                logger.warning(f"Cannot set IMPORT mode for {subject}: {e}")
-                                schema_id = None
-                            else:
-                                raise
-                    
-                    try:
-                        # Register schema in destination
-                        result = dest_client.register_schema(subject, schema, schema_type=schema_type, schema_id=schema_id)
-                        logger.info(f"Successfully migrated {subject} version {version} on retry")
-                        retry_results['successful'].append({
-                            'subject': subject,
-                            'version': version,
-                            'new_id': result.get('id'),
-                            'original_id': version_info['id']
-                        })
-                    finally:
-                        # Restore mode if we set IMPORT
-                        if import_mode_set:
-                            try:
-                                dest_client.set_subject_mode(subject, 'READWRITE')
-                            except Exception as e:
-                                logger.warning(f"Could not restore mode after IMPORT: {e}")
+                    # Register schema in destination
+                    result = dest_client.register_schema(subject, schema, schema_type=schema_type, schema_id=schema_id)
+                    logger.info(f"Successfully migrated {subject} version {version} on retry" + 
+                               (f" with ID {schema_id}" if schema_id else ""))
+                    retry_results['successful'].append({
+                        'subject': subject,
+                        'version': version,
+                        'new_id': result.get('id'),
+                        'original_id': version_info['id']
+                    })
                                 
                 except requests.exceptions.HTTPError as e:
                     if e.response.status_code == 409:
