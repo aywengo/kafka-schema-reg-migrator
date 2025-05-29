@@ -627,6 +627,11 @@ def migrate_schemas(source_client: SchemaRegistryClient, dest_client: SchemaRegi
         logger.info(f"\nRetrying {len(subjects_needing_compatibility_disabled)} subjects with compatibility disabled...")
         
         for subject in subjects_needing_compatibility_disabled:
+            # Store original settings
+            original_mode = None
+            original_compatibility = None
+            mode_changed = False
+            
             # Get current compatibility
             original_compatibility = dest_client.get_subject_compatibility(subject)
             if original_compatibility is None:
@@ -637,6 +642,16 @@ def migrate_schemas(source_client: SchemaRegistryClient, dest_client: SchemaRegi
                 compatibility_was_global = False
             
             try:
+                # First ensure subject is in READWRITE mode
+                try:
+                    original_mode = dest_client.get_subject_mode(subject)
+                    if original_mode != 'READWRITE':
+                        logger.info(f"Setting subject {subject} to READWRITE mode (was {original_mode})")
+                        dest_client.set_subject_mode(subject, 'READWRITE')
+                        mode_changed = True
+                except Exception as e:
+                    logger.warning(f"Could not get/set mode for {subject}: {e}")
+                
                 # Set compatibility to NONE
                 logger.info(f"Setting {subject} compatibility to NONE (was {original_compatibility})")
                 dest_client.set_subject_compatibility(subject, 'NONE')
@@ -671,20 +686,46 @@ def migrate_schemas(source_client: SchemaRegistryClient, dest_client: SchemaRegi
                             })
                             continue
                         
-                        # Register schema
-                        result = dest_client.register_schema(subject, schema, schema_type=schema_type, schema_id=schema_id)
-                        logger.info(f"Successfully migrated {subject} version {version} with compatibility disabled")
+                        # For ID preservation, set IMPORT mode if needed
+                        import_mode_set = False
+                        if preserve_ids and schema_id is not None:
+                            try:
+                                # Get current mode
+                                current_mode = dest_client.get_subject_mode(subject)
+                                if current_mode != 'IMPORT':
+                                    logger.info(f"Setting subject {subject} to IMPORT mode for ID preservation")
+                                    dest_client.set_subject_mode(subject, 'IMPORT')
+                                    import_mode_set = True
+                            except requests.exceptions.HTTPError as e:
+                                if e.response.status_code == 422:
+                                    logger.warning(f"Cannot set IMPORT mode for {subject}: {e}")
+                                    schema_id = None
+                                else:
+                                    raise
                         
-                        # Remove from failed and add to successful
-                        migration_results['failed'] = [f for f in migration_results['failed'] 
-                                                     if not (f['subject'] == subject and f['version'] == version)]
-                        migration_results['successful'].append({
-                            'subject': subject,
-                            'version': version,
-                            'new_id': result.get('id'),
-                            'original_id': version_info['id'],
-                            'compatibility_disabled': True
-                        })
+                        try:
+                            # Register schema
+                            result = dest_client.register_schema(subject, schema, schema_type=schema_type, schema_id=schema_id)
+                            logger.info(f"Successfully migrated {subject} version {version} with compatibility disabled")
+                            
+                            # Remove from failed and add to successful
+                            migration_results['failed'] = [f for f in migration_results['failed'] 
+                                                         if not (f['subject'] == subject and f['version'] == version)]
+                            migration_results['successful'].append({
+                                'subject': subject,
+                                'version': version,
+                                'new_id': result.get('id'),
+                                'original_id': version_info['id'],
+                                'compatibility_disabled': True
+                            })
+                        finally:
+                            # Restore mode if we set IMPORT
+                            if import_mode_set:
+                                try:
+                                    dest_client.set_subject_mode(subject, 'READWRITE')
+                                except Exception as e:
+                                    logger.warning(f"Could not restore mode after IMPORT: {e}")
+                                    
                     except Exception as e:
                         logger.error(f"Failed to migrate {subject} version {version} even with compatibility disabled: {e}")
                         # Update the failure reason
@@ -694,6 +735,14 @@ def migrate_schemas(source_client: SchemaRegistryClient, dest_client: SchemaRegi
                                 break
                 
             finally:
+                # Restore original mode if it was changed
+                if mode_changed and original_mode:
+                    try:
+                        logger.info(f"Restoring subject {subject} mode to {original_mode}")
+                        dest_client.set_subject_mode(subject, original_mode)
+                    except Exception as e:
+                        logger.warning(f"Could not restore mode for {subject}: {e}")
+                
                 # Restore original compatibility
                 if compatibility_was_global:
                     # Delete subject-level compatibility to revert to global
@@ -729,156 +778,210 @@ def retry_failed_migrations(source_client: SchemaRegistryClient, dest_client: Sc
     # Get destination schemas to check what already exists
     dest_schemas = dest_client.get_all_schemas()
     
+    # Check if we should automatically handle compatibility issues
+    auto_handle_compatibility = os.getenv('AUTO_HANDLE_COMPATIBILITY', 'true').lower() == 'true'
+    
+    # Group failed migrations by subject for efficient processing
+    failed_by_subject = {}
     for failed in failed_migrations:
         subject = failed['subject']
-        version = failed['version']
+        if subject not in failed_by_subject:
+            failed_by_subject[subject] = []
+        failed_by_subject[subject].append(failed)
+    
+    # Process each subject
+    for subject, subject_failures in failed_by_subject.items():
+        logger.info(f"\nRetrying {len(subject_failures)} failed versions for subject: {subject}")
         
-        # Find the schema in source
-        if subject not in source_schemas:
-            logger.error(f"Subject {subject} not found in source registry")
-            retry_results['failed'].append({
-                'subject': subject,
-                'version': version,
-                'reason': 'Subject not found in source'
-            })
-            continue
-        
-        version_info = next((v for v in source_schemas[subject] if v['version'] == version), None)
-        if not version_info:
-            logger.error(f"Version {version} not found for subject {subject}")
-            retry_results['failed'].append({
-                'subject': subject,
-                'version': version,
-                'reason': 'Version not found in source'
-            })
-            continue
-        
-        schema = version_info['schema']
-        schema_id = version_info['id'] if preserve_ids else None
-        schema_type = version_info.get('schemaType', 'AVRO')
-        
-        # Check if schema already exists in destination
-        if subject in dest_schemas:
-            dest_versions = dest_schemas[subject]
-            if any(v['schema'] == schema for v in dest_versions):
-                logger.info(f"Skipping {subject} version {version} - schema already exists in destination")
-                retry_results['skipped'].append({
-                    'subject': subject,
-                    'version': version,
-                    'reason': 'Schema already exists in destination'
-                })
-                continue
+        # Store original settings
+        original_mode = None
+        original_compatibility = None
+        mode_changed = False
+        compatibility_changed = False
         
         try:
-            # First check if this exact schema already exists
-            existing_schema = dest_client.check_schema_exists(subject, schema, schema_type)
-            if existing_schema:
-                logger.info(f"Schema already exists for {subject} with ID {existing_schema.get('id')}, marking as skipped")
-                retry_results['skipped'].append({
-                    'subject': subject,
-                    'version': version,
-                    'existing_id': existing_schema.get('id'),
-                    'reason': 'Exact schema already registered'
-                })
-                continue
-            
-            # Check and update subject mode
-            subject_mode = dest_client.get_subject_mode(subject)
-            mode_changed = False
-            
-            # If preserving IDs, we need to set the subject to IMPORT mode
-            if preserve_ids and schema_id is not None:
-                if subject_mode != 'IMPORT':
-                    logger.info(f"Setting subject {subject} to IMPORT mode for ID preservation")
-                    try:
-                        dest_client.set_subject_mode(subject, 'IMPORT')
-                        mode_changed = True
-                    except requests.exceptions.HTTPError as e:
-                        if e.response.status_code == 422:
-                            # Subject must be empty or non-existent to set IMPORT mode
-                            logger.warning(f"Cannot set IMPORT mode for {subject} (subject must be empty): {e}")
-                            # Fall back to migration without ID preservation
-                            schema_id = None
-                            preserve_ids = False
-                        else:
-                            raise
-            elif subject_mode != 'READWRITE':
-                logger.info(f"Subject {subject} is in {subject_mode} mode, changing to READWRITE")
-                dest_client.set_subject_mode(subject, 'READWRITE')
-                mode_changed = True
-            
+            # Always set subject to READWRITE mode for retry
             try:
-                # Register schema in destination with correct schema type
-                result = dest_client.register_schema(subject, schema, schema_type=schema_type, schema_id=schema_id)
-                logger.info(f"Successfully migrated {subject} version {version} on retry (type: {schema_type})")
-                retry_results['successful'].append({
-                    'subject': subject,
-                    'version': version,
-                    'new_id': result.get('id'),
-                    'original_id': version_info['id']
-                })
-            finally:
-                # Restore original mode if it was changed
-                if mode_changed:
-                    logger.info(f"Restoring subject {subject} mode to {subject_mode}")
-                    dest_client.set_subject_mode(subject, subject_mode)
-                    
-        except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 409:
-                # Conflict - schema might already exist, let's check
-                logger.warning(f"Conflict for {subject} version {version}, checking if schema exists...")
-                
-                # Refresh destination schemas
+                original_mode = dest_client.get_subject_mode(subject)
+                if original_mode != 'READWRITE':
+                    logger.info(f"Setting subject {subject} to READWRITE mode (was {original_mode})")
+                    dest_client.set_subject_mode(subject, 'READWRITE')
+                    mode_changed = True
+            except Exception as e:
+                logger.warning(f"Could not get/set mode for {subject}: {e}")
+            
+            # Set compatibility to NONE if AUTO_HANDLE_COMPATIBILITY is enabled
+            if auto_handle_compatibility:
                 try:
-                    dest_subject_schemas = dest_client.get_subject_schemas(subject)
-                    if any(v['schema'] == schema for v in dest_subject_schemas):
-                        logger.info(f"Schema already exists for {subject} version {version}, marking as skipped")
-                        retry_results['skipped'].append({
-                            'subject': subject,
-                            'version': version,
-                            'reason': 'Schema already exists (409 conflict)'
-                        })
+                    original_compatibility = dest_client.get_subject_compatibility(subject)
+                    if original_compatibility is None:
+                        # No subject-level compatibility, get global
+                        original_compatibility = dest_client.get_global_compatibility()
+                        compatibility_was_global = True
                     else:
-                        # Get the latest version to provide more context
-                        latest_version = dest_client.get_latest_version(subject)
-                        logger.error(f"409 Conflict for {subject}: schema content differs from existing versions. Latest version in destination: {latest_version}")
-                        
-                        # Use enhanced error reporting
-                        try:
-                            comparison = compare_schema_versions(source_client, dest_client, subject, version)
-                            if comparison['differences']:
-                                logger.error(f"Schema differences for {subject} version {version}:")
-                                for diff in comparison['differences']:
-                                    logger.error(f"  - {diff}")
-                        except Exception as comp_error:
-                            logger.debug(f"Could not compare schemas: {comp_error}")
-                        
-                        retry_results['failed'].append({
-                            'subject': subject,
-                            'version': version,
-                            'reason': f'409 Conflict: Different schema already exists (latest version: {latest_version})'
-                        })
-                except Exception as check_error:
-                    logger.error(f"Failed to check existing schema: {check_error}")
+                        compatibility_was_global = False
+                    
+                    logger.info(f"Setting {subject} compatibility to NONE (was {original_compatibility})")
+                    dest_client.set_subject_compatibility(subject, 'NONE')
+                    compatibility_changed = True
+                except Exception as e:
+                    logger.warning(f"Could not set compatibility for {subject}: {e}")
+            
+            # Process each failed version
+            for failed in subject_failures:
+                version = failed['version']
+                
+                # Find the schema in source
+                if subject not in source_schemas:
+                    logger.error(f"Subject {subject} not found in source registry")
                     retry_results['failed'].append({
                         'subject': subject,
                         'version': version,
-                        'reason': f'409 Conflict and failed to verify: {str(e)}'
+                        'reason': 'Subject not found in source'
                     })
-            else:
-                logger.error(f"Failed to migrate {subject} version {version} on retry: {str(e)}")
-                retry_results['failed'].append({
-                    'subject': subject,
-                    'version': version,
-                    'reason': str(e)
-                })
-        except Exception as e:
-            logger.error(f"Failed to migrate {subject} version {version} on retry: {str(e)}")
-            retry_results['failed'].append({
-                'subject': subject,
-                'version': version,
-                'reason': str(e)
-            })
+                    continue
+                
+                version_info = next((v for v in source_schemas[subject] if v['version'] == version), None)
+                if not version_info:
+                    logger.error(f"Version {version} not found for subject {subject}")
+                    retry_results['failed'].append({
+                        'subject': subject,
+                        'version': version,
+                        'reason': 'Version not found in source'
+                    })
+                    continue
+                
+                schema = version_info['schema']
+                schema_id = version_info['id'] if preserve_ids else None
+                schema_type = version_info.get('schemaType', 'AVRO')
+                
+                # Check if schema already exists in destination
+                if subject in dest_schemas:
+                    dest_versions = dest_schemas[subject]
+                    if any(v['schema'] == schema for v in dest_versions):
+                        logger.info(f"Skipping {subject} version {version} - schema already exists in destination")
+                        retry_results['skipped'].append({
+                            'subject': subject,
+                            'version': version,
+                            'reason': 'Schema already exists in destination'
+                        })
+                        continue
+                
+                try:
+                    # First check if this exact schema already exists
+                    existing_schema = dest_client.check_schema_exists(subject, schema, schema_type)
+                    if existing_schema:
+                        logger.info(f"Schema already exists for {subject} with ID {existing_schema.get('id')}, marking as skipped")
+                        retry_results['skipped'].append({
+                            'subject': subject,
+                            'version': version,
+                            'existing_id': existing_schema.get('id'),
+                            'reason': 'Exact schema already registered'
+                        })
+                        continue
+                    
+                    # For ID preservation, set IMPORT mode if needed
+                    import_mode_set = False
+                    if preserve_ids and schema_id is not None:
+                        try:
+                            # Get current mode (might have changed)
+                            current_mode = dest_client.get_subject_mode(subject)
+                            if current_mode != 'IMPORT':
+                                logger.info(f"Setting subject {subject} to IMPORT mode for ID preservation")
+                                dest_client.set_subject_mode(subject, 'IMPORT')
+                                import_mode_set = True
+                        except requests.exceptions.HTTPError as e:
+                            if e.response.status_code == 422:
+                                logger.warning(f"Cannot set IMPORT mode for {subject}: {e}")
+                                schema_id = None
+                            else:
+                                raise
+                    
+                    try:
+                        # Register schema in destination
+                        result = dest_client.register_schema(subject, schema, schema_type=schema_type, schema_id=schema_id)
+                        logger.info(f"Successfully migrated {subject} version {version} on retry")
+                        retry_results['successful'].append({
+                            'subject': subject,
+                            'version': version,
+                            'new_id': result.get('id'),
+                            'original_id': version_info['id']
+                        })
+                    finally:
+                        # Restore mode if we set IMPORT
+                        if import_mode_set:
+                            try:
+                                dest_client.set_subject_mode(subject, 'READWRITE')
+                            except Exception as e:
+                                logger.warning(f"Could not restore mode after IMPORT: {e}")
+                                
+                except requests.exceptions.HTTPError as e:
+                    if e.response.status_code == 409:
+                        # Conflict - schema might already exist
+                        logger.warning(f"Conflict for {subject} version {version}, checking if schema exists...")
+                        
+                        # Refresh destination schemas
+                        try:
+                            dest_subject_schemas = dest_client.get_subject_schemas(subject)
+                            if any(v['schema'] == schema for v in dest_subject_schemas):
+                                logger.info(f"Schema already exists for {subject} version {version}, marking as skipped")
+                                retry_results['skipped'].append({
+                                    'subject': subject,
+                                    'version': version,
+                                    'reason': 'Schema already exists (409 conflict)'
+                                })
+                            else:
+                                # Get the latest version to provide more context
+                                latest_version = dest_client.get_latest_version(subject)
+                                logger.error(f"409 Conflict for {subject}: schema content differs. Latest version: {latest_version}")
+                                retry_results['failed'].append({
+                                    'subject': subject,
+                                    'version': version,
+                                    'reason': f'409 Conflict: Different schema exists (latest: {latest_version})'
+                                })
+                        except Exception as check_error:
+                            logger.error(f"Failed to check existing schema: {check_error}")
+                            retry_results['failed'].append({
+                                'subject': subject,
+                                'version': version,
+                                'reason': f'409 Conflict and failed to verify: {str(e)}'
+                            })
+                    else:
+                        logger.error(f"Failed to migrate {subject} version {version} on retry: {str(e)}")
+                        retry_results['failed'].append({
+                            'subject': subject,
+                            'version': version,
+                            'reason': str(e)
+                        })
+                except Exception as e:
+                    logger.error(f"Failed to migrate {subject} version {version} on retry: {str(e)}")
+                    retry_results['failed'].append({
+                        'subject': subject,
+                        'version': version,
+                        'reason': str(e)
+                    })
+                    
+        finally:
+            # Restore original settings
+            if mode_changed and original_mode:
+                try:
+                    logger.info(f"Restoring subject {subject} mode to {original_mode}")
+                    dest_client.set_subject_mode(subject, original_mode)
+                except Exception as e:
+                    logger.warning(f"Could not restore mode for {subject}: {e}")
+            
+            if compatibility_changed:
+                try:
+                    if compatibility_was_global:
+                        # Delete subject-level compatibility to revert to global
+                        response = dest_client.session.delete(dest_client._get_url(f"/config/{subject}"))
+                        logger.info(f"Removed subject-level compatibility for {subject}, reverting to global")
+                    else:
+                        # Restore subject-level compatibility
+                        dest_client.set_subject_compatibility(subject, original_compatibility)
+                        logger.info(f"Restored {subject} compatibility to {original_compatibility}")
+                except Exception as e:
+                    logger.warning(f"Could not restore compatibility for {subject}: {e}")
     
     return retry_results
 
