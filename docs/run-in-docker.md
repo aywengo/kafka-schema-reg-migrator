@@ -27,11 +27,12 @@ docker run -e SOURCE_SCHEMA_REGISTRY_URL=http://source:8081 \
 | `DEST_PASSWORD` | Password for destination Schema Registry authentication | No | - |
 | `SOURCE_CONTEXT` | Context name for source Schema Registry | No | - |
 | `DEST_CONTEXT` | Context name for destination Schema Registry | No | - |
-| `DEST_IMPORT_MODE` | Enable import mode to preserve schema IDs during migration | No | false |
+| `DEST_IMPORT_MODE` | Set global IMPORT mode on destination registry | No | false |
 | `CLEANUP_DESTINATION` | Delete all subjects in destination registry before migration | No | false |
-| `PRESERVE_IDS` | Preserve original schema IDs during migration | No | false |
+| `PRESERVE_IDS` | Preserve original schema IDs during migration (uses subject-level IMPORT mode) | No | false |
 | `RETRY_FAILED` | Automatically retry failed migrations | No | true |
 | `PERMANENT_DELETE` | Use permanent (hard) delete when cleaning up destination | No | true |
+| `DEST_MODE_AFTER_MIGRATION` | Global mode to set after migration (READWRITE, READONLY, READWRITE_OVERRIDE) | No | READWRITE |
 | `LOG_LEVEL` | Logging level (DEBUG, INFO, WARNING, ERROR) | No | INFO |
 
 ## Using Environment File
@@ -55,6 +56,7 @@ CLEANUP_DESTINATION=false
 PRESERVE_IDS=false
 RETRY_FAILED=true
 PERMANENT_DELETE=true
+DEST_MODE_AFTER_MIGRATION=READWRITE
 LOG_LEVEL=DEBUG
 ```
 
@@ -65,26 +67,32 @@ docker run --env-file .env kafka-schema-reg-migrator:latest
 
 ## Import Mode
 
-The `DEST_IMPORT_MODE` setting enables a special mode for schema migration that preserves the original schema IDs from the source registry. This is particularly useful when:
+Schema Registry supports two types of import modes:
 
-- You need to maintain the same schema IDs across registries
-- Downstream systems depend on specific schema IDs
-- You need to ensure exact schema ID matching between source and destination
+### Global Import Mode (`DEST_IMPORT_MODE`)
 
-When `DEST_IMPORT_MODE` is set to `true`:
-- The tool adds a special header `X-Registry-Import: true` to schema registration requests
-- The Schema Registry preserves the original schema IDs instead of generating new ones
-- Schema content and version history remain unchanged
-- Only the schema IDs are preserved
+The `DEST_IMPORT_MODE` setting enables global IMPORT mode on the destination registry. This affects all operations on the registry.
 
-Note that using import mode requires appropriate permissions on the destination registry. The import mode works in conjunction with other settings like `ENABLE_MIGRATION` and `DRY_RUN`.
+### Subject-Level Import Mode (`PRESERVE_IDS`)
 
-Example configuration for import mode:
+When `PRESERVE_IDS` is set to `true`, the tool uses subject-level IMPORT mode for ID preservation:
+
+1. Before registering each schema, the specific subject is set to IMPORT mode
+2. The schema is registered with its original ID from the source registry  
+3. After registration, the subject is returned to its original mode
+
+This follows the official Confluent Schema Registry migration process:
+- The subject must be empty or non-existent to set IMPORT mode
+- If a subject already has schemas, ID preservation will be skipped for that subject
+- Subject-level IMPORT mode is used regardless of the global mode setting
+
+Example configuration for ID preservation:
 ```bash
 SOURCE_SCHEMA_REGISTRY_URL=http://source:8081
 DEST_SCHEMA_REGISTRY_URL=http://dest:8081
 ENABLE_MIGRATION=true
-DEST_IMPORT_MODE=true  # Enable import mode to preserve schema IDs
+PRESERVE_IDS=true  # Uses subject-level IMPORT mode for each subject
+CLEANUP_DESTINATION=true  # Recommended to ensure subjects are empty
 ```
 
 ## Example with Docker Compose
@@ -110,6 +118,7 @@ services:
       - PRESERVE_IDS=false
       - RETRY_FAILED=true
       - PERMANENT_DELETE=true
+      - DEST_MODE_AFTER_MIGRATION=READWRITE
       - LOG_LEVEL=DEBUG
 ```
 

@@ -24,8 +24,7 @@ class SchemaRegistryClient:
         url: str,
         username: Optional[str] = None,
         password: Optional[str] = None,
-        context: Optional[str] = None,
-        import_mode: bool = False
+        context: Optional[str] = None
     ):
         # Validate username and password
         if (username is None) != (password is None):
@@ -34,11 +33,10 @@ class SchemaRegistryClient:
         self.url = url.rstrip('/')
         self.auth = (username, password) if username and password else None
         self.context = context
-        self.import_mode = import_mode
         self.session = requests.Session()
         if self.auth:
             self.session.auth = self.auth
-        logger.info(f"Initialized SchemaRegistryClient for {url} (import_mode: {import_mode})")
+        logger.info(f"Initialized SchemaRegistryClient for {url}")
 
     def _get_url(self, path: str) -> str:
         """Construct URL with optional context."""
@@ -153,6 +151,34 @@ class SchemaRegistryClient:
         logger.info(f"Set subject {subject} mode to {mode}")
         return result
 
+    def get_global_mode(self) -> str:
+        """Get the global mode for the Schema Registry."""
+        try:
+            response = self.session.get(self._get_url("/mode"))
+            response.raise_for_status()
+            result = response.json()
+            mode = result.get('mode', 'READWRITE')
+            logger.debug(f"Global mode: {mode}")
+            return mode
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                # No global mode set, defaults to READWRITE
+                logger.debug("No global mode set, defaulting to READWRITE")
+                return 'READWRITE'
+            raise
+
+    def set_global_mode(self, mode: str) -> Dict:
+        """Set the global mode for the Schema Registry."""
+        payload = {"mode": mode}
+        response = self.session.put(
+            self._get_url("/mode"),
+            json=payload
+        )
+        response.raise_for_status()
+        result = response.json()
+        logger.info(f"Set global mode to {mode}")
+        return result
+
     def register_schema(self, subject: str, schema: str, schema_type: str = "AVRO", schema_id: Optional[int] = None) -> Dict:
         """Register a new schema version for a subject."""
         payload = {
@@ -160,28 +186,19 @@ class SchemaRegistryClient:
             "schemaType": schema_type
         }
         
-        # Add schema ID if provided AND import mode is enabled
-        # Some Schema Registry versions don't support ID in payload without import mode
-        if schema_id is not None and self.import_mode:
+        # Add schema ID if provided
+        if schema_id is not None:
             payload["id"] = schema_id
-            logger.debug(f"Including ID {schema_id} in payload with import mode enabled")
-        elif schema_id is not None:
-            logger.warning(f"ID preservation requested but import mode not enabled for destination client")
-        
-        # Add import mode header if enabled
-        headers = {}
-        if self.import_mode:
-            headers['X-Registry-Import'] = 'true'
+            logger.debug(f"Including ID {schema_id} in payload")
         
         try:
             response = self.session.post(
                 self._get_url(f"/subjects/{subject}/versions"),
-                json=payload,
-                headers=headers
+                json=payload
             )
             response.raise_for_status()
             result = response.json()
-            logger.info(f"Registered new schema version for subject {subject}" + (f" with ID {schema_id}" if schema_id and self.import_mode else ""))
+            logger.info(f"Registered new schema version for subject {subject}" + (f" with ID {schema_id}" if schema_id else ""))
             return result
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 409:
@@ -208,8 +225,7 @@ class SchemaRegistryClient:
                     del payload["id"]
                     response = self.session.post(
                         self._get_url(f"/subjects/{subject}/versions"),
-                        json=payload,
-                        headers=headers
+                        json=payload
                     )
                     response.raise_for_status()
                     result = response.json()
@@ -420,7 +436,23 @@ def migrate_schemas(source_client: SchemaRegistryClient, dest_client: SchemaRegi
                     subject_mode = dest_client.get_subject_mode(subject)
                     mode_changed = False
                     
-                    if subject_mode != 'READWRITE':
+                    # If preserving IDs, we need to set the subject to IMPORT mode
+                    if preserve_ids and schema_id is not None:
+                        if subject_mode != 'IMPORT':
+                            logger.info(f"Setting subject {subject} to IMPORT mode for ID preservation")
+                            try:
+                                dest_client.set_subject_mode(subject, 'IMPORT')
+                                mode_changed = True
+                            except requests.exceptions.HTTPError as e:
+                                if e.response.status_code == 422:
+                                    # Subject must be empty or non-existent to set IMPORT mode
+                                    logger.warning(f"Cannot set IMPORT mode for {subject} (subject must be empty): {e}")
+                                    # Fall back to migration without ID preservation
+                                    schema_id = None
+                                    preserve_ids = False
+                                else:
+                                    raise
+                    elif subject_mode != 'READWRITE':
                         logger.info(f"Subject {subject} is in {subject_mode} mode, changing to READWRITE")
                         dest_client.set_subject_mode(subject, 'READWRITE')
                         mode_changed = True
@@ -579,7 +611,23 @@ def retry_failed_migrations(source_client: SchemaRegistryClient, dest_client: Sc
             subject_mode = dest_client.get_subject_mode(subject)
             mode_changed = False
             
-            if subject_mode != 'READWRITE':
+            # If preserving IDs, we need to set the subject to IMPORT mode
+            if preserve_ids and schema_id is not None:
+                if subject_mode != 'IMPORT':
+                    logger.info(f"Setting subject {subject} to IMPORT mode for ID preservation")
+                    try:
+                        dest_client.set_subject_mode(subject, 'IMPORT')
+                        mode_changed = True
+                    except requests.exceptions.HTTPError as e:
+                        if e.response.status_code == 422:
+                            # Subject must be empty or non-existent to set IMPORT mode
+                            logger.warning(f"Cannot set IMPORT mode for {subject} (subject must be empty): {e}")
+                            # Fall back to migration without ID preservation
+                            schema_id = None
+                            preserve_ids = False
+                        else:
+                            raise
+            elif subject_mode != 'READWRITE':
                 logger.info(f"Subject {subject} is in {subject_mode} mode, changing to READWRITE")
                 dest_client.set_subject_mode(subject, 'READWRITE')
                 mode_changed = True
@@ -770,6 +818,74 @@ def cleanup_registry(client: SchemaRegistryClient, permanent: bool = True) -> No
         logger.error(f"Failed to clean up destination registry: {e}")
         raise
 
+def set_mode_for_all_subjects(client: SchemaRegistryClient, mode: str) -> None:
+    """Set the mode for all subjects in the registry.
+    
+    Args:
+        client: The Schema Registry client
+        mode: The mode to set (e.g., 'READWRITE', 'READONLY', 'READWRITE_OVERRIDE')
+    """
+    try:
+        subjects = client.get_subjects()
+        if not subjects:
+            logger.info("No subjects found in registry to set mode")
+            return
+        
+        logger.info(f"Setting mode to {mode} for {len(subjects)} subjects in destination registry...")
+        
+        success_count = 0
+        failed_subjects = []
+        
+        for subject in subjects:
+            try:
+                # Get current mode
+                current_mode = client.get_subject_mode(subject)
+                
+                # Only update if mode is different
+                if current_mode != mode:
+                    client.set_subject_mode(subject, mode)
+                    logger.debug(f"Changed subject {subject} mode from {current_mode} to {mode}")
+                    success_count += 1
+                else:
+                    logger.debug(f"Subject {subject} already in {mode} mode, skipping")
+                    success_count += 1
+                    
+            except Exception as e:
+                logger.warning(f"Failed to set mode for subject {subject}: {e}")
+                failed_subjects.append(subject)
+        
+        if failed_subjects:
+            logger.warning(f"Successfully set mode for {success_count} subjects, failed for {len(failed_subjects)} subjects")
+            logger.warning(f"Failed subjects: {', '.join(failed_subjects)}")
+        else:
+            logger.info(f"Successfully set mode to {mode} for all {success_count} subjects")
+            
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Failed to get subjects from registry: {e}")
+        raise
+
+def set_global_mode_after_migration(client: SchemaRegistryClient, mode: str) -> None:
+    """Set the global mode for the Schema Registry after migration.
+    
+    Args:
+        client: The Schema Registry client
+        mode: The mode to set (e.g., 'READWRITE', 'READONLY', 'READWRITE_OVERRIDE')
+    """
+    try:
+        # Get current global mode
+        current_mode = client.get_global_mode()
+        
+        if current_mode != mode:
+            logger.info(f"Setting global mode from {current_mode} to {mode}...")
+            client.set_global_mode(mode)
+            logger.info(f"Successfully set global mode to {mode}")
+        else:
+            logger.info(f"Global mode already set to {mode}, no change needed")
+            
+    except Exception as e:
+        logger.error(f"Failed to set global mode: {e}")
+        raise
+
 def main():
     # Initialize source client
     source_client = SchemaRegistryClient(
@@ -785,10 +901,18 @@ def main():
         username=os.getenv('DEST_USERNAME'),
         password=os.getenv('DEST_PASSWORD'),
         context=os.getenv('DEST_CONTEXT'),
-        import_mode=os.getenv('DEST_IMPORT_MODE', 'false').lower() == 'true'
     )
 
     try:
+        # Set global IMPORT mode if requested
+        if os.getenv('DEST_IMPORT_MODE', 'false').lower() == 'true':
+            logger.info("Setting global mode to IMPORT for destination registry...")
+            try:
+                dest_client.set_global_mode('IMPORT')
+            except Exception as e:
+                logger.warning(f"Failed to set global IMPORT mode: {e}")
+                # Continue anyway, subject-level IMPORT mode will be used for ID preservation
+
         # Get schemas from both registries
         source_schemas = source_client.get_all_schemas()
         dest_schemas = dest_client.get_all_schemas()
@@ -921,6 +1045,19 @@ def main():
                     logger.warning("4. Check if subjects are in read-only mode and need to be changed")
                 else:
                     logger.info("Validation successful: All items were migrated correctly")
+            
+            # Set mode for all subjects after migration if specified
+            # This is particularly useful for reverting from IMPORT mode when DEST_IMPORT_MODE=true
+            mode_after_migration = os.getenv('DEST_MODE_AFTER_MIGRATION', 'READWRITE')
+            if not dry_run:
+                logger.info(f"\nSetting global mode in destination registry to {mode_after_migration}...")
+                try:
+                    set_global_mode_after_migration(dest_client, mode_after_migration)
+                except Exception as e:
+                    logger.error(f"Failed to set mode after migration: {e}")
+                    # Don't fail the entire migration if mode setting fails
+                    logger.warning("Migration completed but mode setting failed. You may need to set mode manually.")
+            
         else:
             logger.info("\nMigration disabled. Set ENABLE_MIGRATION=true to enable migration.")
 

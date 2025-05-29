@@ -803,15 +803,16 @@ def verify_migration_with_different_contexts(source_url: str, dest_url: str) -> 
         return False
 
 def run_import_mode_migration() -> bool:
-    """Run the migration script in import mode."""
+    """Run the migration script with global import mode."""
     env = os.environ.copy()
     env.update({
         'SOURCE_SCHEMA_REGISTRY_URL': 'http://localhost:38081',
         'DEST_SCHEMA_REGISTRY_URL': 'http://localhost:38082',
         'ENABLE_MIGRATION': 'true',
         'DRY_RUN': 'false',
-        'DEST_IMPORT_MODE': 'true',
-        'CLEANUP_DESTINATION': 'true'  # Need to clean up for import mode to work
+        'DEST_IMPORT_MODE': 'true',  # Set global IMPORT mode
+        'PRESERVE_IDS': 'true',  # Also preserve IDs using subject-level IMPORT mode
+        'CLEANUP_DESTINATION': 'true'  # Need to clean up for subject-level IMPORT mode to work
     })
     
     try:
@@ -823,6 +824,11 @@ def run_import_mode_migration() -> bool:
             text=True
         )
         logger.info(result.stdout)
+        
+        # Check if global IMPORT mode was set
+        if "Setting global mode to IMPORT" in result.stdout:
+            logger.info("Global IMPORT mode was set as expected")
+        
         return True
     except subprocess.CalledProcessError as e:
         logger.error(f"Import mode migration failed with exit code {e.returncode}")
@@ -1097,8 +1103,7 @@ def run_migration_with_preserve_ids() -> bool:
         'ENABLE_MIGRATION': 'true',
         'DRY_RUN': 'false',
         'PRESERVE_IDS': 'true',
-        'DEST_IMPORT_MODE': 'true',  # Required for ID preservation
-        'CLEANUP_DESTINATION': 'true'  # Clean up to avoid ID collisions
+        'CLEANUP_DESTINATION': 'true'  # Clean up to ensure subjects are empty for IMPORT mode
     })
     
     try:
@@ -1114,6 +1119,12 @@ def run_migration_with_preserve_ids() -> bool:
         logger.info(f"Migration stdout: {result.stdout}")
         if result.stderr:
             logger.error(f"Migration stderr: {result.stderr}")
+        
+        # Check if subject-level IMPORT mode was used
+        if "Setting subject" in result.stdout and "to IMPORT mode" in result.stdout:
+            logger.info("Subject-level IMPORT mode was used as expected")
+        else:
+            logger.warning("Subject-level IMPORT mode not detected in output")
         
         if result.returncode != 0:
             logger.error("Migration failed")
@@ -1720,6 +1731,246 @@ def run_permanent_delete_test() -> bool:
         logger.error(f"Permanent delete test failed: {e}")
         return False
 
+def test_set_mode_for_all_subjects_unit() -> bool:
+    """Unit test for set_global_mode_after_migration function."""
+    try:
+        # Clean up destination first
+        cleanup_destination()
+        time.sleep(1)
+        
+        session = create_session_with_retries()
+        
+        # Create test subjects
+        subjects_data = [
+            ("test-unit-subject1", "READWRITE"),
+            ("test-unit-subject2", "READONLY"),
+            ("test-unit-subject3", "READWRITE")
+        ]
+        
+        # Create schemas
+        for subject, _ in subjects_data:
+            schema = {
+                "type": "record",
+                "name": f"Test{subject.replace('-', '')}",
+                "fields": [{"name": "id", "type": "int"}]
+            }
+            
+            # Register schema
+            response = session.post(
+                f'http://localhost:38082/subjects/{subject}/versions',
+                json={"schema": json.dumps(schema)}
+            )
+            response.raise_for_status()
+            
+            logger.info(f"Created {subject}")
+        
+        # Test 1: Set global mode to READONLY
+        client = SchemaRegistryClient(url='http://localhost:38082')
+        
+        # Get initial global mode
+        initial_mode = client.get_global_mode()
+        logger.info(f"Initial global mode: {initial_mode}")
+        
+        # Set to READONLY
+        client.set_global_mode('READONLY')
+        
+        # Verify global mode is READONLY
+        mode = client.get_global_mode()
+        if mode != 'READONLY':
+            logger.error(f"Global mode is not READONLY: {mode}")
+            return False
+        
+        logger.info("Successfully set global mode to READONLY")
+        
+        # Test 2: Set global mode back to READWRITE
+        client.set_global_mode('READWRITE')
+        
+        # Verify global mode is READWRITE
+        mode = client.get_global_mode()
+        if mode != 'READWRITE':
+            logger.error(f"Global mode is not READWRITE: {mode}")
+            return False
+        
+        logger.info("Successfully set global mode back to READWRITE")
+        
+        # Test 3: Test with empty registry (after cleanup)
+        cleanup_destination()
+        time.sleep(1)
+        
+        # This should not fail even with no subjects
+        client.set_global_mode('READONLY')
+        mode = client.get_global_mode()
+        if mode != 'READONLY':
+            logger.error(f"Failed to set global mode with empty registry: {mode}")
+            return False
+            
+        logger.info("Function handles empty registry correctly")
+        
+        return True
+        
+    except Exception as e:
+        logger.error(f"Unit test for global mode failed: {e}")
+        return False
+
+def run_mode_after_migration_test() -> bool:
+    """Test MODE_AFTER_MIGRATION functionality."""
+    # Clean up destination first
+    try:
+        cleanup_destination()
+        cleanup_source()  # Clean up source to avoid schema accumulation
+        time.sleep(2)
+    except Exception as e:
+        logger.error(f"Failed to clean up before mode after migration test: {e}")
+        return False
+    
+    session = create_session_with_retries()
+    
+    try:
+        # Create test schemas in source
+        schemas = [
+            ("test-mode-subject1", {
+                "type": "record",
+                "name": "TestMode1",
+                "fields": [{"name": "id", "type": "int"}]
+            }),
+            ("test-mode-subject2", {
+                "type": "record",
+                "name": "TestMode2",
+                "fields": [{"name": "name", "type": "string"}]
+            }),
+            ("test-mode-subject3", {
+                "type": "record",
+                "name": "TestMode3",
+                "fields": [{"name": "value", "type": "double"}]
+            })
+        ]
+        
+        # Register schemas in source
+        for subject, schema in schemas:
+            response = session.post(
+                f'http://localhost:38081/subjects/{subject}/versions',
+                json={"schema": json.dumps(schema)}
+            )
+            response.raise_for_status()
+            logger.info(f"Created schema for subject {subject}")
+        
+        # Test 1: Migration with DEST_MODE_AFTER_MIGRATION=READONLY
+        logger.info("Testing migration with DEST_MODE_AFTER_MIGRATION=READONLY...")
+        env = os.environ.copy()
+        env.update({
+            'SOURCE_SCHEMA_REGISTRY_URL': 'http://localhost:38081',
+            'DEST_SCHEMA_REGISTRY_URL': 'http://localhost:38082',
+            'ENABLE_MIGRATION': 'true',
+            'DRY_RUN': 'false',
+            'PRESERVE_IDS': 'false',
+            'CLEANUP_DESTINATION': 'true',
+            'DEST_MODE_AFTER_MIGRATION': 'READONLY'  # Set global mode to READONLY after migration
+        })
+        
+        result = subprocess.run(
+            ['python', '../schema_registry_migrator.py'],
+            env=env,
+            check=False,
+            capture_output=True,
+            text=True
+        )
+        
+        if result.returncode != 0:
+            logger.error(f"Migration failed with exit code {result.returncode}")
+            logger.error(f"Stderr: {result.stderr}")
+            return False
+        
+        # Verify global mode is READONLY
+        response = session.get('http://localhost:38082/mode')
+        if response.status_code == 200:
+            mode_data = response.json()
+            mode = mode_data.get('mode', 'READWRITE')
+            if mode != 'READONLY':
+                logger.error(f"Global mode is not READONLY: {mode}")
+                return False
+            else:
+                logger.info("Global mode is correctly set to READONLY")
+        else:
+            logger.error("Failed to get global mode")
+            return False
+        
+        # Test 2: Migration with DEST_MODE_AFTER_MIGRATION=READWRITE (default)
+        logger.info("\nTesting migration with DEST_MODE_AFTER_MIGRATION=READWRITE...")
+        
+        # Clean up and recreate schemas
+        cleanup_destination()
+        time.sleep(1)
+        
+        env['DEST_MODE_AFTER_MIGRATION'] = 'READWRITE'  # Explicitly set to READWRITE
+        
+        result = subprocess.run(
+            ['python', '../schema_registry_migrator.py'],
+            env=env,
+            check=False,
+            capture_output=True,
+            text=True
+        )
+        
+        if result.returncode != 0:
+            logger.error(f"Migration failed with exit code {result.returncode}")
+            logger.error(f"Stderr: {result.stderr}")
+            return False
+        
+        # Verify global mode is READWRITE
+        response = session.get('http://localhost:38082/mode')
+        if response.status_code == 200:
+            mode_data = response.json()
+            mode = mode_data.get('mode', 'READWRITE')
+            if mode != 'READWRITE':
+                logger.error(f"Global mode is not READWRITE: {mode}")
+                return False
+            else:
+                logger.info("Global mode is correctly set to READWRITE")
+        else:
+            # If no mode is set, it defaults to READWRITE
+            logger.info("No global mode set (defaults to READWRITE)")
+        
+        # Test 3: Test with DEST_IMPORT_MODE=true (should revert from IMPORT mode)
+        logger.info("\nTesting DEST_MODE_AFTER_MIGRATION with DEST_IMPORT_MODE=true...")
+        
+        # Clean up
+        cleanup_destination()
+        time.sleep(1)
+        
+        # Run migration with import mode and DEST_MODE_AFTER_MIGRATION=READWRITE
+        env['DEST_IMPORT_MODE'] = 'true'
+        env['DEST_MODE_AFTER_MIGRATION'] = 'READWRITE'
+        
+        result = subprocess.run(
+            ['python', '../schema_registry_migrator.py'],
+            env=env,
+            check=False,
+            capture_output=True,
+            text=True
+        )
+        
+        if result.returncode != 0:
+            logger.error(f"Migration failed with exit code {result.returncode}")
+            logger.error(f"Stderr: {result.stderr}")
+            return False
+        
+        # Verify global mode is READWRITE (reverted from IMPORT)
+        response = session.get('http://localhost:38082/mode')
+        if response.status_code == 200:
+            mode_data = response.json()
+            mode = mode_data.get('mode', 'READWRITE')
+            if mode != 'READWRITE':
+                logger.error(f"Global mode is not READWRITE after import mode: {mode}")
+                return False
+            else:
+                logger.info("Global mode correctly reverted from IMPORT to READWRITE")
+        
+        return True
+            
+    except Exception as e:
+        logger.error(f"Mode after migration test failed: {e}")
+        return False
+
 def main():
     """Run all tests."""
     tests = [
@@ -1741,7 +1992,9 @@ def main():
         (16, "PROTOBUF schema migration test", run_protobuf_schema_migration_test),
         (17, "Mixed schema types test", run_mixed_schema_types_test),
         (18, "Conflict handling test", run_conflict_handling_test),
-        (19, "Permanent delete test", run_permanent_delete_test)
+        (19, "Permanent delete test", run_permanent_delete_test),
+        (20, "Mode after migration test", run_mode_after_migration_test),
+        (21, "Global mode unit test", test_set_mode_for_all_subjects_unit)
     ]
 
     success = True

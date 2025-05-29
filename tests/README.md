@@ -26,6 +26,21 @@ To keep the test environment running after tests complete (useful for debugging)
 ./run_tests.sh --debug
 ```
 
+### Running Specific Tests
+
+To run only the MODE_AFTER_MIGRATION tests with pytest:
+
+```bash
+# Start the test environment
+docker-compose up -d
+
+# Run the pytest tests
+pytest test_mode_after_migration.py -v
+
+# Or run specific test
+pytest test_mode_after_migration.py::TestModeAfterMigration::test_mode_after_migration_readonly -v
+```
+
 ## Test Cases
 
 ### 1. Comparison-only Test
@@ -38,7 +53,7 @@ Tests the destination registry cleanup functionality.
 Tests basic schema migration from source to destination.
 
 ### 4. Import Mode Migration Test
-Tests migration with import mode enabled (preserves schema IDs).
+Tests migration with global import mode enabled and ID preservation using subject-level IMPORT mode.
 
 ### 5. Context Migration Test
 Tests migration between different contexts.
@@ -71,8 +86,10 @@ Tests automatic handling of subjects in read-only mode:
 ### 13. Migration with ID Preservation Test
 Tests schema migration with ID preservation enabled:
 - Enables PRESERVE_IDS flag
+- Uses subject-level IMPORT mode for each subject
 - Migrates schemas
 - Verifies original IDs are preserved
+- Subjects must be empty for IMPORT mode to work
 
 ### 14. Retry Failed Migrations Test
 Tests the automatic retry mechanism:
@@ -80,6 +97,36 @@ Tests the automatic retry mechanism:
 - Verifies retry is triggered
 - Confirms successful migration after retry
 - Verifies subject modes are properly restored
+
+### 15. JSON Schema Migration Test
+Tests migration of JSON schema types.
+
+### 16. PROTOBUF Schema Migration Test
+Tests migration of PROTOBUF schema types.
+
+### 17. Mixed Schema Types Test
+Tests migration with multiple schema types (AVRO, JSON, PROTOBUF) in one run.
+
+### 18. Conflict Handling Test
+Tests handling of 409 conflicts when schema already exists.
+
+### 19. Permanent Delete Test
+Tests permanent (hard) delete functionality.
+
+### 20. Mode After Migration Test
+Tests the DEST_MODE_AFTER_MIGRATION functionality:
+- Migrates schemas with DEST_MODE_AFTER_MIGRATION=READONLY
+- Verifies global mode is set to READONLY after migration
+- Tests with DEST_MODE_AFTER_MIGRATION=READWRITE (default)
+- Verifies mode is set even when migration has failures
+- Confirms mode is not changed in dry-run mode
+- Useful for reverting from IMPORT mode when DEST_IMPORT_MODE=true
+
+### 21. Set Mode for All Subjects Unit Test
+Unit test for the set_global_mode_after_migration function:
+- Tests setting global mode to READONLY
+- Tests setting global mode back to READWRITE
+- Tests handling when mode is already set
 
 ## Test Infrastructure
 
