@@ -179,6 +179,64 @@ class SchemaRegistryClient:
         logger.info(f"Set global mode to {mode}")
         return result
 
+    def get_global_compatibility(self) -> str:
+        """Get the global compatibility level for the Schema Registry."""
+        try:
+            response = self.session.get(self._get_url("/config"))
+            response.raise_for_status()
+            result = response.json()
+            compatibility = result.get('compatibilityLevel', 'BACKWARD')
+            logger.debug(f"Global compatibility: {compatibility}")
+            return compatibility
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                # No global compatibility set, defaults to BACKWARD
+                logger.debug("No global compatibility set, defaulting to BACKWARD")
+                return 'BACKWARD'
+            raise
+
+    def set_global_compatibility(self, compatibility: str) -> Dict:
+        """Set the global compatibility level for the Schema Registry."""
+        payload = {"compatibility": compatibility}
+        response = self.session.put(
+            self._get_url("/config"),
+            json=payload,
+            headers={"Content-Type": "application/vnd.schemaregistry.v1+json"}
+        )
+        response.raise_for_status()
+        result = response.json()
+        logger.info(f"Set global compatibility to {compatibility}")
+        return result
+
+    def get_subject_compatibility(self, subject: str) -> Optional[str]:
+        """Get the compatibility level for a specific subject."""
+        try:
+            response = self.session.get(self._get_url(f"/config/{subject}"))
+            response.raise_for_status()
+            result = response.json()
+            compatibility = result.get('compatibilityLevel')
+            logger.debug(f"Subject {subject} compatibility: {compatibility}")
+            return compatibility
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404 or e.response.status_code == 40408:
+                # Subject compatibility not set
+                logger.debug(f"Subject {subject} has no specific compatibility set")
+                return None
+            raise
+
+    def set_subject_compatibility(self, subject: str, compatibility: str) -> Dict:
+        """Set the compatibility level for a specific subject."""
+        payload = {"compatibility": compatibility}
+        response = self.session.put(
+            self._get_url(f"/config/{subject}"),
+            json=payload,
+            headers={"Content-Type": "application/vnd.schemaregistry.v1+json"}
+        )
+        response.raise_for_status()
+        result = response.json()
+        logger.info(f"Set subject {subject} compatibility to {compatibility}")
+        return result
+
     def register_schema(self, subject: str, schema: str, schema_type: str = "AVRO", schema_id: Optional[int] = None) -> Dict:
         """Register a new schema version for a subject."""
         payload = {
@@ -412,6 +470,12 @@ def migrate_schemas(source_client: SchemaRegistryClient, dest_client: SchemaRegi
     source_schemas = source_client.get_all_schemas()
     dest_schemas = dest_client.get_all_schemas()
 
+    # Check if we should automatically handle compatibility issues
+    auto_handle_compatibility = os.getenv('AUTO_HANDLE_COMPATIBILITY', 'true').lower() == 'true'
+
+    # Track subjects that need compatibility disabled
+    subjects_needing_compatibility_disabled = set()
+
     # Process each subject in source registry
     for subject, versions in source_schemas.items():
         logger.info(f"Processing subject: {subject}")
@@ -510,45 +574,38 @@ def migrate_schemas(source_client: SchemaRegistryClient, dest_client: SchemaRegi
                         })
             except requests.exceptions.HTTPError as e:
                 if e.response.status_code == 409:
-                    # Conflict - schema might already exist, let's check
-                    logger.warning(f"Conflict for {subject} version {version}, checking if schema exists...")
+                    # Conflict - might be due to compatibility issues
+                    logger.warning(f"Conflict for {subject} version {version}, checking if it's a compatibility issue...")
                     
-                    # Refresh destination schemas for this subject
-                    try:
-                        dest_subject_schemas = dest_client.get_subject_schemas(subject)
-                        if any(v['schema'] == schema for v in dest_subject_schemas):
-                            logger.info(f"Schema already exists for {subject} version {version}, marking as skipped")
-                            migration_results['skipped'].append({
-                                'subject': subject,
-                                'version': version,
-                                'reason': 'Schema already exists (409 conflict)'
-                            })
-                        else:
-                            # Get the latest version to provide more context
-                            latest_version = dest_client.get_latest_version(subject)
-                            logger.error(f"409 Conflict for {subject}: schema content differs from existing versions. Latest version in destination: {latest_version}")
-                            
-                            # Use enhanced error reporting
-                            try:
-                                comparison = compare_schema_versions(source_client, dest_client, subject, version)
-                                if comparison['differences']:
-                                    logger.error(f"Schema differences for {subject} version {version}:")
-                                    for diff in comparison['differences']:
-                                        logger.error(f"  - {diff}")
-                            except Exception as comp_error:
-                                logger.debug(f"Could not compare schemas: {comp_error}")
-                            
-                            retry_results['failed'].append({
-                                'subject': subject,
-                                'version': version,
-                                'reason': f'409 Conflict: Different schema already exists (latest version: {latest_version})'
-                            })
-                    except Exception as check_error:
-                        logger.error(f"Failed to check existing schema: {check_error}")
+                    # Check if we should try with compatibility disabled
+                    if not dry_run and auto_handle_compatibility and subject not in subjects_needing_compatibility_disabled:
+                        subjects_needing_compatibility_disabled.add(subject)
+                        logger.info(f"Will retry {subject} with compatibility disabled")
                         migration_results['failed'].append({
                             'subject': subject,
                             'version': version,
-                            'reason': f'409 Conflict and failed to verify: {str(e)}'
+                            'reason': '409 Conflict - will retry with compatibility disabled',
+                            'retry_with_compatibility_disabled': True
+                        })
+                    else:
+                        # Get the latest version to provide more context
+                        latest_version = dest_client.get_latest_version(subject)
+                        logger.error(f"409 Conflict for {subject}: schema content differs from existing versions. Latest version in destination: {latest_version}")
+                        
+                        # Use enhanced error reporting
+                        try:
+                            comparison = compare_schema_versions(source_client, dest_client, subject, version)
+                            if comparison['differences']:
+                                logger.error(f"Schema differences for {subject} version {version}:")
+                                for diff in comparison['differences']:
+                                    logger.error(f"  - {diff}")
+                        except Exception as comp_error:
+                            logger.debug(f"Could not compare schemas: {comp_error}")
+                        
+                        migration_results['failed'].append({
+                            'subject': subject,
+                            'version': version,
+                            'reason': f'409 Conflict: Different schema already exists (latest version: {latest_version})'
                         })
                 else:
                     logger.error(f"Failed to migrate {subject} version {version}: {str(e)}")
@@ -564,6 +621,94 @@ def migrate_schemas(source_client: SchemaRegistryClient, dest_client: SchemaRegi
                     'version': version,
                     'reason': str(e)
                 })
+
+    # Retry subjects that need compatibility disabled
+    if not dry_run and subjects_needing_compatibility_disabled:
+        logger.info(f"\nRetrying {len(subjects_needing_compatibility_disabled)} subjects with compatibility disabled...")
+        
+        for subject in subjects_needing_compatibility_disabled:
+            # Get current compatibility
+            original_compatibility = dest_client.get_subject_compatibility(subject)
+            if original_compatibility is None:
+                # No subject-level compatibility, get global
+                original_compatibility = dest_client.get_global_compatibility()
+                compatibility_was_global = True
+            else:
+                compatibility_was_global = False
+            
+            try:
+                # Set compatibility to NONE
+                logger.info(f"Setting {subject} compatibility to NONE (was {original_compatibility})")
+                dest_client.set_subject_compatibility(subject, 'NONE')
+                
+                # Retry migration for this subject
+                subject_versions = source_schemas[subject]
+                subject_versions.sort(key=lambda x: x['version'])
+                
+                for version_info in subject_versions:
+                    version = version_info['version']
+                    schema = version_info['schema']
+                    schema_id = version_info['id'] if preserve_ids else None
+                    schema_type = version_info.get('schemaType', 'AVRO')
+                    
+                    # Skip if already successful
+                    if any(m['subject'] == subject and m['version'] == version for m in migration_results['successful']):
+                        continue
+                    
+                    try:
+                        # Check if schema already exists
+                        existing_schema = dest_client.check_schema_exists(subject, schema, schema_type)
+                        if existing_schema:
+                            logger.info(f"Schema already exists for {subject} version {version}, skipping")
+                            # Remove from failed and add to skipped
+                            migration_results['failed'] = [f for f in migration_results['failed'] 
+                                                         if not (f['subject'] == subject and f['version'] == version)]
+                            migration_results['skipped'].append({
+                                'subject': subject,
+                                'version': version,
+                                'existing_id': existing_schema.get('id'),
+                                'reason': 'Exact schema already registered'
+                            })
+                            continue
+                        
+                        # Register schema
+                        result = dest_client.register_schema(subject, schema, schema_type=schema_type, schema_id=schema_id)
+                        logger.info(f"Successfully migrated {subject} version {version} with compatibility disabled")
+                        
+                        # Remove from failed and add to successful
+                        migration_results['failed'] = [f for f in migration_results['failed'] 
+                                                     if not (f['subject'] == subject and f['version'] == version)]
+                        migration_results['successful'].append({
+                            'subject': subject,
+                            'version': version,
+                            'new_id': result.get('id'),
+                            'original_id': version_info['id'],
+                            'compatibility_disabled': True
+                        })
+                    except Exception as e:
+                        logger.error(f"Failed to migrate {subject} version {version} even with compatibility disabled: {e}")
+                        # Update the failure reason
+                        for failure in migration_results['failed']:
+                            if failure['subject'] == subject and failure['version'] == version:
+                                failure['reason'] = f"Failed even with compatibility disabled: {str(e)}"
+                                break
+                
+            finally:
+                # Restore original compatibility
+                if compatibility_was_global:
+                    # Delete subject-level compatibility to revert to global
+                    try:
+                        response = dest_client.session.delete(dest_client._get_url(f"/config/{subject}"))
+                        logger.info(f"Removed subject-level compatibility for {subject}, reverting to global")
+                    except:
+                        pass
+                else:
+                    # Restore subject-level compatibility
+                    try:
+                        dest_client.set_subject_compatibility(subject, original_compatibility)
+                        logger.info(f"Restored {subject} compatibility to {original_compatibility}")
+                    except Exception as e:
+                        logger.warning(f"Could not restore compatibility for {subject}: {e}")
 
     return migration_results
 
@@ -1148,15 +1293,6 @@ def main():
     )
 
     try:
-        # Set global IMPORT mode if requested
-        if os.getenv('DEST_IMPORT_MODE', 'false').lower() == 'true':
-            logger.info("Setting global mode to IMPORT for destination registry...")
-            try:
-                dest_client.set_global_mode('IMPORT')
-            except Exception as e:
-                logger.warning(f"Failed to set global IMPORT mode: {e}")
-                # Continue anyway, subject-level IMPORT mode will be used for ID preservation
-
         # Get schemas from both registries
         source_schemas = source_client.get_all_schemas()
         dest_schemas = dest_client.get_all_schemas()
@@ -1220,6 +1356,17 @@ def main():
 
             # Perform migration (dry run by default)
             dry_run = os.getenv('DRY_RUN', 'true').lower() == 'true'
+            
+            # Set global IMPORT mode AFTER cleanup if requested (only for actual migration, not dry run)
+            if not dry_run and os.getenv('DEST_IMPORT_MODE', 'false').lower() == 'true':
+                logger.info("\nSetting global mode to IMPORT for destination registry (after cleanup)...")
+                try:
+                    dest_client.set_global_mode('IMPORT')
+                    logger.info("Successfully set global IMPORT mode")
+                except Exception as e:
+                    logger.warning(f"Failed to set global IMPORT mode: {e}")
+                    # Continue anyway, subject-level IMPORT mode will be used for ID preservation
+            
             if dry_run:
                 logger.info("\nPerforming dry run migration...")
             else:

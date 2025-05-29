@@ -328,3 +328,14 @@ See [docs/run-in-docker.md](docs/run-in-docker.md) for Docker usage instructions
 ## License
 
 See [LICENSE](LICENSE) file for details.
+
+### Compatibility Handling
+
+- `AUTO_HANDLE_COMPATIBILITY`: Automatically handle compatibility issues during migration (default: `true`)
+  - When enabled, if a schema fails with a 409 Conflict (compatibility issue), the tool will:
+    1. Temporarily set the subject's compatibility to `NONE`
+    2. Retry the migration for that subject
+    3. Restore the original compatibility setting
+  - This helps migrate schemas that have evolved in ways that break compatibility rules
+
+### Cleanup Options
