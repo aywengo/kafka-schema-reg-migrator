@@ -17,77 +17,6 @@ A tool for migrating schemas between Kafka Schema Registry instances, with suppo
 - **Read-Only Subject Handling**: Automatically handles subjects in read-only mode during migration
 - **Schema Type Support**: Supports migration of AVRO, JSON, and PROTOBUF schemas
 
-## QuickStart
-
-### Comparison Only
-
-To compare schemas between two registries without making any changes:
-
-```bash
-# Using Docker
-docker run -it --env-file .env kafka-schema-reg-migrator
-
-# Using Python
-python schema_registry_migrator.py
-```
-
-Required environment variables:
-```bash
-SOURCE_SCHEMA_REGISTRY_URL=http://source:8081
-DEST_SCHEMA_REGISTRY_URL=http://dest:8081
-ENABLE_MIGRATION=false
-```
-
-This will:
-- Compare schemas between source and destination
-- Show schema statistics and versions
-- Identify potential ID collisions
-- Display version differences
-- No changes are made to either registry
-
-### Migration
-
-To migrate schemas from source to destination:
-
-```bash
-# Using Docker
-docker run -it --env-file .env kafka-schema-reg-migrator
-
-# Using Python
-python schema_registry_migrator.py
-```
-
-Required environment variables:
-```bash
-SOURCE_SCHEMA_REGISTRY_URL=http://source:8081
-DEST_SCHEMA_REGISTRY_URL=http://dest:8081
-ENABLE_MIGRATION=true
-DRY_RUN=false
-```
-
-Optional settings:
-```bash
-# To preserve schema IDs
-DEST_IMPORT_MODE=true
-
-# To clean up destination before migration
-CLEANUP_DESTINATION=true
-
-# To use specific contexts
-SOURCE_CONTEXT=source-context
-DEST_CONTEXT=dest-context
-```
-
-This will:
-- Compare schemas between registries
-- Check for ID collisions
-- Migrate schemas from source to destination
-- Preserve schema IDs if import mode is enabled
-- Clean up destination if specified
-- Show migration results and statistics
-- Validate the migration by checking for any missing subjects or versions
-- Provide warnings and suggestions if any discrepancies are found
-
 ## Prerequisites
 
 - **Python 3.8+** (for running scripts and tests locally)
@@ -113,23 +42,10 @@ pip install -r requirements.txt
 docker build -t kafka-schema-reg-migrator .
 ```
 
-### Using Docker
+### Option 3: Using DockerHub
 
 ```bash
 docker pull aywengo/kafka-schema-reg-migrator:latest
-```
-
-### From Source
-
-1. Clone the repository:
-```bash
-git clone https://github.com/aywengo/kafka-schema-reg-migrator.git
-cd kafka-schema-reg-migrator
-```
-
-2. Install dependencies:
-```bash
-pip install -r requirements.txt
 ```
 
 ## Configuration
@@ -140,82 +56,119 @@ Create a `.env` file with the following variables:
 ```
 SOURCE_SCHEMA_REGISTRY_URL=http://source-schema-registry:8081
 DEST_SCHEMA_REGISTRY_URL=http://dest-schema-registry:8081
+ENABLE_MIGRATION=false    # Set to true to enable migration
 ```
 
-### Optional Authentication
+### Optional Variables
 ```
+# Authentication
 SOURCE_USERNAME=optional_username
 SOURCE_PASSWORD=optional_password
 DEST_USERNAME=optional_username
 DEST_PASSWORD=optional_password
-```
 
-### Optional Context
-```
+# Context
 SOURCE_CONTEXT=optional_context
 DEST_CONTEXT=optional_context
-```
 
-### Migration Control
-```
-ENABLE_MIGRATION=false    # Set to true to enable migration
+# Migration Control
 DRY_RUN=true             # Set to false to perform actual migration
 DEST_IMPORT_MODE=false   # Set to true to enable import mode for destination
 CLEANUP_DESTINATION=false # Set to true to clean up destination before migration
 PRESERVE_IDS=false       # Set to true to preserve original schema IDs
 RETRY_FAILED=true        # Set to false to disable retry of failed migrations
 PERMANENT_DELETE=true    # Set to false to use soft delete when cleaning up
-DEST_MODE_AFTER_MIGRATION=READWRITE  # Global mode to set after migration (READWRITE, READONLY, READWRITE_OVERRIDE)
+DEST_MODE_AFTER_MIGRATION=READWRITE  # Global mode to set after migration
+LOG_LEVEL=INFO          # Logging level (DEBUG, INFO, WARNING, ERROR)
 ```
 
 ## Usage
 
-### Local Usage
+### Comparison Mode
 
-Run the script:
+To compare schemas between two registries without making any changes:
+
 ```bash
+# Using Docker
+docker run -it --env-file .env kafka-schema-reg-migrator
+
+# Using Python
 python schema_registry_migrator.py
 ```
 
-### Docker Usage
-
-Run the container:
+Required `.env` file for comparison:
 ```bash
-docker run --env-file .env kafka-schema-reg-migrator
+# Required URLs for source and destination registries
+SOURCE_SCHEMA_REGISTRY_URL=http://source:8081
+DEST_SCHEMA_REGISTRY_URL=http://dest:8081
+
+# Disable migration to run in comparison mode only
+ENABLE_MIGRATION=false
+
+# Optional: Add authentication if required
+SOURCE_USERNAME=optional_username
+SOURCE_PASSWORD=optional_password
+DEST_USERNAME=optional_username
+DEST_PASSWORD=optional_password
 ```
 
-For interactive mode (to run tests or other commands):
+This will:
+- Compare schemas between source and destination
+- Show schema statistics and versions
+- Identify potential ID collisions
+- Display version differences
+- No changes are made to either registry
+
+### Migration Mode
+
+To migrate schemas from source to destination:
+
 ```bash
-docker run -it --env-file .env kafka-schema-reg-migrator /bin/bash
+# Using Docker
+docker run -it --env-file .env kafka-schema-reg-migrator
+
+# Using Python
+python schema_registry_migrator.py
 ```
 
-To run tests in Docker:
+Required `.env` file for migration:
 ```bash
-docker run -it --env-file .env kafka-schema-reg-migrator bash -c "cd tests && ./run_tests.sh"
+# Required URLs for source and destination registries
+SOURCE_SCHEMA_REGISTRY_URL=http://source:8081
+DEST_SCHEMA_REGISTRY_URL=http://dest:8081
+
+# Enable migration mode
+ENABLE_MIGRATION=true
+DRY_RUN=false
+
+# Optional: Preserve schema IDs during migration
+DEST_IMPORT_MODE=true
+
+# Optional: Clean up destination before migration
+CLEANUP_DESTINATION=true
+
+# Optional: Use specific contexts if needed
+SOURCE_CONTEXT=source-context
+DEST_CONTEXT=dest-context
+
+# Optional: Authentication if required
+SOURCE_USERNAME=optional_username
+SOURCE_PASSWORD=optional_password
+DEST_USERNAME=optional_username
+DEST_PASSWORD=optional_password
 ```
 
-### Environment Variables
+This will:
+- Compare schemas between registries
+- Check for ID collisions
+- Migrate schemas from source to destination
+- Preserve schema IDs if import mode is enabled
+- Clean up destination if specified
+- Show migration results and statistics
+- Validate the migration by checking for any missing subjects or versions
+- Provide warnings and suggestions if any discrepancies are found
 
-| Variable | Description | Required | Default |
-|----------|-------------|----------|---------|
-| `SOURCE_SCHEMA_REGISTRY_URL` | URL of the source Schema Registry | Yes | - |
-| `DEST_SCHEMA_REGISTRY_URL` | URL of the destination Schema Registry | Yes | - |
-| `ENABLE_MIGRATION` | Enable schema migration | Yes | - |
-| `DRY_RUN` | Run in dry-run mode (no actual changes) | No | true |
-| `SOURCE_USERNAME` | Username for source Schema Registry authentication | No | - |
-| `SOURCE_PASSWORD` | Password for source Schema Registry authentication | No | - |
-| `DEST_USERNAME` | Username for destination Schema Registry authentication | No | - |
-| `DEST_PASSWORD` | Password for destination Schema Registry authentication | No | - |
-| `SOURCE_CONTEXT` | Context name for source Schema Registry | No | - |
-| `DEST_CONTEXT` | Context name for destination Schema Registry | No | - |
-| `DEST_IMPORT_MODE` | Set global IMPORT mode on destination registry | No | false |
-| `CLEANUP_DESTINATION` | Delete all subjects in destination registry before migration | No | false |
-| `CLEANUP_SUBJECTS` | Comma-separated list of specific subjects to delete before migration | No | - |
-| `PRESERVE_IDS` | Preserve original schema IDs during migration (uses subject-level IMPORT mode) | No | false |
-| `RETRY_FAILED` | Automatically retry failed migrations | No | true |
-| `PERMANENT_DELETE` | Use permanent (hard) delete when cleaning up destination | No | true |
-| `DEST_MODE_AFTER_MIGRATION` | Global mode to set after migration (READWRITE, READONLY, READWRITE_OVERRIDE) | No | READWRITE |
-| `LOG_LEVEL` | Logging level (DEBUG, INFO, WARNING, ERROR) | No | INFO |
+## Advanced Features
 
 ### ID Collision Handling
 
@@ -231,24 +184,13 @@ The tool detects and handles ID collisions between source and destination regist
    - The destination registry will be cleaned up before migration
    - Migration will proceed normally
 
-### ID Preservation with Subject-Level IMPORT Mode
+### ID Preservation
 
 When `PRESERVE_IDS=true`, the tool uses subject-level IMPORT mode to preserve schema IDs:
 
 1. **Subject-level IMPORT mode**: Before registering each schema, the tool sets the specific subject to IMPORT mode
 2. **Register with ID**: The schema is registered with its original ID from the source registry
 3. **Restore mode**: After registration, the subject is returned to its original mode
-
-This approach follows the official Confluent Schema Registry migration process:
-- The subject must be empty or non-existent to set IMPORT mode
-- If a subject already has schemas, ID preservation will be skipped for that subject
-- This is independent of the global IMPORT mode (`DEST_IMPORT_MODE`)
-
-### Global vs Subject-Level Modes
-
-- **`DEST_IMPORT_MODE`**: Sets the global mode of the destination registry to IMPORT
-- **`DEST_MODE_AFTER_MIGRATION`**: Sets the global mode after migration completes
-- **`PRESERVE_IDS`**: Uses subject-level IMPORT mode for each subject during migration
 
 ### Read-Only Subject Handling
 
@@ -257,14 +199,6 @@ The tool automatically handles subjects that are in read-only mode:
 - Temporarily changes them to READWRITE for migration
 - Restores the original mode after migration
 - Failed migrations are automatically retried with mode changes (if `RETRY_FAILED=true`)
-
-### Conflict Handling
-
-The tool handles 409 Conflict errors gracefully:
-- When a schema already exists in the destination, it will be skipped
-- The tool verifies if the existing schema matches the source schema
-- Conflicts are logged and reported in the migration summary
-- This prevents duplicate schema registrations and ensures idempotent migrations
 
 ### Selective Subject Cleanup
 
@@ -276,47 +210,25 @@ CLEANUP_SUBJECTS=subject1,subject2,subject3
 PERMANENT_DELETE=true
 ```
 
-This is useful when:
-- You have version mismatches in specific subjects
-- You want to re-migrate only certain subjects
-- You need to resolve conflicts without affecting the entire registry
-
-### Enhanced Error Reporting
-
-When schema conflicts occur (409 errors), the tool now provides detailed information about the differences:
-- Field-level differences for AVRO schemas
-- Namespace and type differences
-- Clear indication of what fields exist only in source or destination
-
-Example error output:
-```
-ERROR - 409 Conflict for user-events: schema content differs from existing versions. Latest version in destination: 20
-ERROR - Schema differences for user-events version 9:
-ERROR -   - Fields only in source: newField1, newField2
-ERROR -   - Fields only in destination: oldField1
-ERROR -   - Namespace differs: source='com.example.v2', dest='com.example.v1'
-```
-
-### Running Tests
+## Testing
 
 The test suite includes both integration tests and unit tests:
 
 ```bash
-# Run all tests with pytest
-pytest tests/test_migration.py -v
+cd tests
+./run_tests.sh
 
-# Run integration tests only
-python tests/test_migration.py
+# Run tests with debug mode
+./run_tests.sh --debug
+
+# Run test environment without testing
+docker compose up -d
 ```
 
 The test environment includes:
 - Source Schema Registry (port 38081)
 - Destination Schema Registry (port 38082)
 - AKHQ UI (port 38080) - A modern UI for managing both Kafka clusters and Schema Registries
-
-## Docker Support
-
-See [docs/run-in-docker.md](docs/run-in-docker.md) for Docker usage instructions.
 
 ## Documentation
 
@@ -328,14 +240,3 @@ See [docs/run-in-docker.md](docs/run-in-docker.md) for Docker usage instructions
 ## License
 
 See [LICENSE](LICENSE) file for details.
-
-### Compatibility Handling
-
-- `AUTO_HANDLE_COMPATIBILITY`: Automatically handle compatibility issues during migration (default: `true`)
-  - When enabled, if a schema fails with a 409 Conflict (compatibility issue), the tool will:
-    1. Temporarily set the subject's compatibility to `NONE`
-    2. Retry the migration for that subject
-    3. Restore the original compatibility setting
-  - This helps migrate schemas that have evolved in ways that break compatibility rules
-
-### Cleanup Options
