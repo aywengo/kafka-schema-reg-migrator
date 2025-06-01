@@ -237,17 +237,22 @@ class SchemaRegistryClient:
         logger.info(f"Set subject {subject} compatibility to {compatibility}")
         return result
 
-    def register_schema(self, subject: str, schema: str, schema_type: str = "AVRO", schema_id: Optional[int] = None) -> Dict:
+    def register_schema(self, subject: str, schema: str, schema_type: str = "AVRO", schema_id: Optional[int] = None, version: Optional[int] = None) -> Dict:
         """Register a new schema version for a subject."""
         payload = {
             "schema": schema,
             "schemaType": schema_type
         }
         
-        # Add schema ID if provided
+        # Add schema ID if provided (for IMPORT mode)
         if schema_id is not None:
             payload["id"] = schema_id
             logger.debug(f"Including ID {schema_id} in payload")
+            
+        # Add version if provided (for IMPORT mode)
+        if version is not None:
+            payload["version"] = version
+            logger.debug(f"Including version {version} in payload")
         
         try:
             response = self.session.post(
@@ -256,17 +261,23 @@ class SchemaRegistryClient:
             )
             response.raise_for_status()
             result = response.json()
-            logger.info(f"Registered new schema version for subject {subject}" + (f" with ID {schema_id}" if schema_id else ""))
+            logger.info(f"Registered new schema version for subject {subject}" + 
+                       (f" with ID {schema_id}" if schema_id else "") +
+                       (f" and version {version}" if version else ""))
             return result
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 409:
                 # Conflict - check if the schema already exists
                 logger.debug(f"Got 409 conflict for {subject}, checking if schema already exists...")
                 try:
-                    # Check if this exact schema already exists
+                    # Check if this exact schema already exists (without version/id)
+                    check_payload = {
+                        "schema": schema,
+                        "schemaType": schema_type
+                    }
                     response = self.session.post(
                         self._get_url(f"/subjects/{subject}"),
-                        json=payload
+                        json=check_payload
                     )
                     if response.status_code == 200:
                         result = response.json()
@@ -277,17 +288,20 @@ class SchemaRegistryClient:
                 # Re-raise the original 409 error
                 raise
             elif e.response.status_code == 422:
-                # Try without ID if we get a 422 error
-                if schema_id is not None and "id" in payload:
-                    logger.warning(f"Failed to register with ID, retrying without ID: {e}")
-                    del payload["id"]
+                # Try without ID/version if we get a 422 error
+                if (schema_id is not None or version is not None) and ("id" in payload or "version" in payload):
+                    logger.warning(f"Failed to register with ID/version, retrying without: {e}")
+                    retry_payload = {
+                        "schema": schema,
+                        "schemaType": schema_type
+                    }
                     response = self.session.post(
                         self._get_url(f"/subjects/{subject}/versions"),
-                        json=payload
+                        json=retry_payload
                     )
                     response.raise_for_status()
                     result = response.json()
-                    logger.info(f"Registered new schema version for subject {subject} (without ID preservation)")
+                    logger.info(f"Registered new schema version for subject {subject} (without ID/version preservation)")
                     return result
             raise
 
@@ -457,8 +471,13 @@ def compare_schemas(source_schemas: Dict, dest_schemas: Dict) -> Tuple[Dict, Lis
 
     return comparison, collisions
 
-def migrate_schemas(source_client: SchemaRegistryClient, dest_client: SchemaRegistryClient, 
-                   dry_run: bool = True, preserve_ids: bool = False) -> Dict[str, List[Dict]]:
+def migrate_schemas(
+        source_client: SchemaRegistryClient, 
+        dest_client: SchemaRegistryClient, 
+        dry_run: bool = True, 
+        preserve_ids: bool = False,
+        auto_handle_compatibility: bool = True
+    ) -> Dict[str, List[Dict]]:
     """Migrate schemas from source to destination registry."""
     migration_results = {
         'successful': [],
@@ -554,7 +573,7 @@ def migrate_schemas(source_client: SchemaRegistryClient, dest_client: SchemaRegi
                         
                         try:
                             # Register schema in destination with correct schema type
-                            result = dest_client.register_schema(subject, schema, schema_type=schema_type, schema_id=schema_id)
+                            result = dest_client.register_schema(subject, schema, schema_type=schema_type, schema_id=schema_id, version=version)
                             logger.info(f"Successfully migrated {subject} version {version} (type: {schema_type})")
                             migration_results['successful'].append({
                                 'subject': subject,
@@ -569,7 +588,7 @@ def migrate_schemas(source_client: SchemaRegistryClient, dest_client: SchemaRegi
                                 dest_client.set_subject_mode(subject, subject_mode)
                     else:
                         # We're in IMPORT mode, just register with ID
-                        result = dest_client.register_schema(subject, schema, schema_type=schema_type, schema_id=schema_id)
+                        result = dest_client.register_schema(subject, schema, schema_type=schema_type, schema_id=schema_id, version=version)
                         logger.info(f"Successfully migrated {subject} version {version} with ID {schema_id} (type: {schema_type})")
                         migration_results['successful'].append({
                             'subject': subject,
@@ -751,9 +770,10 @@ def migrate_schemas(source_client: SchemaRegistryClient, dest_client: SchemaRegi
                             continue
                         
                         # Register schema
-                        result = dest_client.register_schema(subject, schema, schema_type=schema_type, schema_id=schema_id)
+                        result = dest_client.register_schema(subject, schema, schema_type=schema_type, schema_id=schema_id, version=version)
                         logger.info(f"Successfully migrated {subject} version {version} with compatibility disabled" +
-                                   (f" and ID {schema_id}" if schema_id else ""))
+                                   (f" and ID {schema_id}" if schema_id else "") +
+                                   (f" and version {version}" if version else ""))
                         
                         # Remove from failed and add to successful
                         migration_results['failed'] = [f for f in migration_results['failed'] 
@@ -949,9 +969,10 @@ def retry_failed_migrations(source_client: SchemaRegistryClient, dest_client: Sc
                         continue
                     
                     # Register schema in destination
-                    result = dest_client.register_schema(subject, schema, schema_type=schema_type, schema_id=schema_id)
+                    result = dest_client.register_schema(subject, schema, schema_type=schema_type, schema_id=schema_id, version=version)
                     logger.info(f"Successfully migrated {subject} version {version} on retry" + 
-                               (f" with ID {schema_id}" if schema_id else ""))
+                               (f" with ID {schema_id}" if schema_id else "") +
+                               (f" and version {version}" if version else ""))
                     retry_results['successful'].append({
                         'subject': subject,
                         'version': version,
