@@ -345,7 +345,9 @@ def compare_schemas(source_schemas: Dict, dest_schemas: Dict) -> Tuple[Dict, Lis
         'common': [],
         'id_differences': [],
         'version_differences': [],
-        'schema_differences': []
+        'schema_differences': [],
+        'version_gaps': [],
+        'version_sequence': {}
     }
 
     # Get all unique schema IDs
@@ -354,6 +356,25 @@ def compare_schemas(source_schemas: Dict, dest_schemas: Dict) -> Tuple[Dict, Lis
     
     # Check source schemas
     for subject, versions in source_schemas.items():
+        # Track version sequence for this subject
+        comparison['version_sequence'][subject] = {
+            'source_versions': sorted([v['version'] for v in versions]),
+            'dest_versions': sorted([v['version'] for v in dest_schemas.get(subject, [])]) if subject in dest_schemas else []
+        }
+        
+        # Check for version gaps in source
+        source_versions = sorted([v['version'] for v in versions])
+        if source_versions:
+            expected_sequence = list(range(1, max(source_versions) + 1))
+            if source_versions != expected_sequence:
+                comparison['version_gaps'].append({
+                    'subject': subject,
+                    'type': 'source',
+                    'actual_versions': source_versions,
+                    'expected_versions': expected_sequence,
+                    'missing_versions': list(set(expected_sequence) - set(source_versions))
+                })
+        
         for version in versions:
             source_ids.add(version['id'])
             
@@ -375,7 +396,8 @@ def compare_schemas(source_schemas: Dict, dest_schemas: Dict) -> Tuple[Dict, Lis
                     'subject': subject,
                     'version': version['version'],
                     'source_id': version['id'],
-                    'type': 'missing_in_dest'
+                    'type': 'missing_in_dest',
+                    'details': f"Version {version['version']} exists in source but not in destination"
                 })
             else:
                 # Check schema content
@@ -384,7 +406,8 @@ def compare_schemas(source_schemas: Dict, dest_schemas: Dict) -> Tuple[Dict, Lis
                         'subject': subject,
                         'version': version['version'],
                         'source_id': version['id'],
-                        'dest_id': dest_version['id']
+                        'dest_id': dest_version['id'],
+                        'details': "Schema content differs between source and destination"
                     })
                 
                 # Check ID differences
@@ -393,11 +416,25 @@ def compare_schemas(source_schemas: Dict, dest_schemas: Dict) -> Tuple[Dict, Lis
                         'subject': subject,
                         'version': version['version'],
                         'source_id': version['id'],
-                        'dest_id': dest_version['id']
+                        'dest_id': dest_version['id'],
+                        'details': f"ID mismatch: source={version['id']}, dest={dest_version['id']}"
                     })
 
     # Check destination schemas for items not in source
     for subject, versions in dest_schemas.items():
+        # Check for version gaps in destination
+        dest_versions = sorted([v['version'] for v in versions])
+        if dest_versions:
+            expected_sequence = list(range(1, max(dest_versions) + 1))
+            if dest_versions != expected_sequence:
+                comparison['version_gaps'].append({
+                    'subject': subject,
+                    'type': 'destination',
+                    'actual_versions': dest_versions,
+                    'expected_versions': expected_sequence,
+                    'missing_versions': list(set(expected_sequence) - set(dest_versions))
+                })
+        
         for version in versions:
             dest_ids.add(version['id'])
             
@@ -419,7 +456,8 @@ def compare_schemas(source_schemas: Dict, dest_schemas: Dict) -> Tuple[Dict, Lis
                     'subject': subject,
                     'version': version['version'],
                     'dest_id': version['id'],
-                    'type': 'missing_in_source'
+                    'type': 'missing_in_source',
+                    'details': f"Version {version['version']} exists in destination but not in source"
                 })
 
     # Find common subjects
@@ -452,7 +490,8 @@ def compare_schemas(source_schemas: Dict, dest_schemas: Dict) -> Tuple[Dict, Lis
                         'version': version['version'],
                         'id': source_id,
                         'dest_subject': dest_info['subject'],
-                        'dest_version': dest_info['version']
+                        'dest_version': dest_info['version'],
+                        'details': f"ID {source_id} used by different schemas in source ({subject} v{version['version']}) and destination ({dest_info['subject']} v{dest_info['version']})"
                     })
 
     # Log detailed comparison results
@@ -463,11 +502,23 @@ def compare_schemas(source_schemas: Dict, dest_schemas: Dict) -> Tuple[Dict, Lis
     logger.info(f"- Version differences: {len(comparison['version_differences'])}")
     logger.info(f"- Schema differences: {len(comparison['schema_differences'])}")
     logger.info(f"- ID differences: {len(comparison['id_differences'])}")
+    logger.info(f"- Version gaps: {len(comparison['version_gaps'])}")
+    
+    # Log version gaps details
+    if comparison['version_gaps']:
+        logger.warning("\nVersion gaps detected:")
+        for gap in comparison['version_gaps']:
+            logger.warning(f"Subject: {gap['subject']} ({gap['type']})")
+            logger.warning(f"  Actual versions: {gap['actual_versions']}")
+            logger.warning(f"  Expected versions: {gap['expected_versions']}")
+            logger.warning(f"  Missing versions: {gap['missing_versions']}")
     
     if collisions:
-        logger.warning(f"Found {len(collisions)} ID collisions")
+        logger.warning(f"\nFound {len(collisions)} ID collisions")
+        for collision in collisions:
+            logger.warning(f"  {collision['details']}")
     else:
-        logger.info("No ID collisions found")
+        logger.info("\nNo ID collisions found")
 
     return comparison, collisions
 
@@ -1300,10 +1351,32 @@ def compare_schema_versions(source_client: SchemaRegistryClient, dest_client: Sc
         'schemas_match': False,
         'source_schema': None,
         'dest_schema': None,
-        'differences': []
+        'differences': [],
+        'version_gaps': {
+            'source': None,
+            'destination': None
+        },
+        'version_sequence': {
+            'source': [],
+            'destination': []
+        }
     }
     
     try:
+        # Get all versions for the subject in source
+        source_versions = source_client.get_versions(subject)
+        comparison['version_sequence']['source'] = sorted(source_versions)
+        
+        # Check for version gaps in source
+        if source_versions:
+            expected_sequence = list(range(1, max(source_versions) + 1))
+            if source_versions != expected_sequence:
+                comparison['version_gaps']['source'] = {
+                    'actual_versions': source_versions,
+                    'expected_versions': expected_sequence,
+                    'missing_versions': list(set(expected_sequence) - set(source_versions))
+                }
+        
         # Get source schema
         source_schema_info = source_client.get_schema(subject, version)
         comparison['source_exists'] = True
@@ -1317,6 +1390,20 @@ def compare_schema_versions(source_client: SchemaRegistryClient, dest_client: Sc
             raise
     
     try:
+        # Get all versions for the subject in destination
+        dest_versions = dest_client.get_versions(subject)
+        comparison['version_sequence']['destination'] = sorted(dest_versions)
+        
+        # Check for version gaps in destination
+        if dest_versions:
+            expected_sequence = list(range(1, max(dest_versions) + 1))
+            if dest_versions != expected_sequence:
+                comparison['version_gaps']['destination'] = {
+                    'actual_versions': dest_versions,
+                    'expected_versions': expected_sequence,
+                    'missing_versions': list(set(expected_sequence) - set(dest_versions))
+                }
+        
         # Get destination schema
         dest_schema_info = dest_client.get_schema(subject, version)
         comparison['dest_exists'] = True
