@@ -73,7 +73,7 @@ DEST_CONTEXT=optional_context
 
 # Migration Control
 DRY_RUN=true             # Set to false to perform actual migration
-DEST_IMPORT_MODE=false   # Set to true to enable import mode for destination
+DEST_IMPORT_MODE=false   # Set to true to enable import mode for destination (requires Schema Registry 7.0+)
 CLEANUP_DESTINATION=false # Set to true to clean up destination before migration
 PRESERVE_IDS=false       # Set to true to preserve original schema IDs
 RETRY_FAILED=true        # Set to false to disable retry of failed migrations
@@ -186,7 +186,7 @@ The tool detects and handles ID collisions between source and destination regist
 
 ### ID Preservation
 
-When `PRESERVE_IDS=true`, the tool uses subject-level IMPORT mode to preserve schema IDs:
+When `PRESERVE_IDS=true`, the tool uses subject-level IMPORT mode to preserve schema IDs. Note that this feature requires Schema Registry version 7.0 or above.
 
 1. **Subject-level IMPORT mode**: Before registering each schema, the tool sets the specific subject to IMPORT mode
 2. **Register with ID**: The schema is registered with its original ID from the source registry
