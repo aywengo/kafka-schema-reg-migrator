@@ -1,6 +1,6 @@
 services:
   kafka-source:
-    image: confluentinc/cp-kafka:8.2.4
+    image: confluentinc/cp-kafka:8.3.2
     hostname: kafka-source
     container_name: kafka-source
     ports:
@@ -33,7 +33,7 @@ services:
       retries: 10
 
   kafka-dest:
-    image: confluentinc/cp-kafka:8.2.4
+    image: confluentinc/cp-kafka:8.3.2
     hostname: kafka-dest
     container_name: kafka-dest
     ports:
@@ -66,7 +66,7 @@ services:
       retries: 10
 
   schema-registry-source:
-    image: confluentinc/cp-schema-registry:8.2.4
+    image: confluentinc/cp-schema-registry:8.3.2
     hostname: schema-registry-source
     container_name: schema-registry-source
     depends_on:
@@ -88,7 +88,7 @@ services:
       start_period: 30s
 
   schema-registry-dest:
-    image: confluentinc/cp-schema-registry:8.2.4
+    image: confluentinc/cp-schema-registry:8.3.2
     hostname: schema-registry-dest
     container_name: schema-registry-dest
     depends_on:
