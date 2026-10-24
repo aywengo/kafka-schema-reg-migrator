@@ -81,7 +81,7 @@ services:
       SCHEMA_REGISTRY_DELETE_SUBJECT_ENABLED: "true"
       SCHEMA_REGISTRY_DELETE_VERSION_ENABLED: "true"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8081/subjects"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8081/subjects', timeout=5).read()"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -103,7 +103,7 @@ services:
       SCHEMA_REGISTRY_DELETE_SUBJECT_ENABLED: "true"
       SCHEMA_REGISTRY_DELETE_VERSION_ENABLED: "true"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8082/subjects"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8082/subjects', timeout=5).read()"]
       interval: 10s
       timeout: 5s
       retries: 10
