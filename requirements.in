@@ -1,0 +1,5 @@
+# Top-level runtime dependencies.
+# Regenerate the hashed lock with:
+#   uv pip compile requirements.in --universal --generate-hashes --python-version 3.13 -o requirements.txt
+requests>=2.34.2
+python-dotenv>=1.2.4

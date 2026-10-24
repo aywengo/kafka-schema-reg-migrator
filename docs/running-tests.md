@@ -29,7 +29,7 @@ The test suite includes both integration tests and unit tests:
 ### Prerequisites
 
 1. Docker and Docker Compose installed
-2. Python 3.8+ installed
+2. Python 3.10+ installed
 3. Required Python packages installed:
    ```bash
    pip install -r requirements.txt

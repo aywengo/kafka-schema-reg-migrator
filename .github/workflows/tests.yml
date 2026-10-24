@@ -1,0 +1,71 @@
+name: Tests
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '*.py'
+      - 'tests/**'
+      - 'requirements.in'
+      - 'requirements.txt'
+      - 'Dockerfile'
+      - '.github/workflows/tests.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '*.py'
+      - 'tests/**'
+      - 'requirements.in'
+      - 'requirements.txt'
+      - 'Dockerfile'
+      - '.github/workflows/tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --require-hashes -r requirements.txt
+          python -m pip install pytest
+
+      - name: Start test stack
+        working-directory: tests
+        run: docker compose up -d --wait --wait-timeout 300
+
+      - name: Populate source registry
+        working-directory: tests
+        run: python populate_source.py
+
+      - name: Run integration tests
+        working-directory: tests
+        run: python test_migration.py
+
+      - name: Run pytest tests
+        working-directory: tests
+        run: pytest -q test_mode_after_migration.py
+
+      - name: Show container logs on failure
+        if: failure()
+        working-directory: tests
+        run: docker compose logs --tail=200
+
+      - name: Tear down test stack
+        if: always()
+        working-directory: tests
+        run: docker compose down -v
