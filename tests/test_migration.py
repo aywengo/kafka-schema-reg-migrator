@@ -21,7 +21,9 @@ from schema_registry_migrator import (
     retry_failed_migrations,
     set_global_mode_after_migration,
     cleanup_specific_subjects,
-    compare_schema_versions
+    compare_schema_versions,
+    TimeoutSession,
+    get_http_timeout
 )
 import unittest
 
@@ -35,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 def create_session_with_retries() -> requests.Session:
     """Create a requests session with retry logic."""
-    session = requests.Session()
+    session = TimeoutSession(get_http_timeout())
     retry_strategy = Retry(
         total=3,
         backoff_factor=1,
@@ -2693,6 +2695,47 @@ class TestMigration(unittest.TestCase):
             except:
                 pass
 
+def run_http_timeout_test():
+    """Unit test: HTTP timeout is configurable and applied to requests."""
+    import schema_registry_migrator as srm
+
+    original_timeout = os.environ.get('HTTP_TIMEOUT')
+    original_request = requests.Session.request
+    try:
+        os.environ.pop('HTTP_TIMEOUT', None)
+        client = SchemaRegistryClient('http://localhost:38081')
+        assert client.timeout == srm.DEFAULT_HTTP_TIMEOUT
+        assert client.session.timeout == srm.DEFAULT_HTTP_TIMEOUT
+
+        os.environ['HTTP_TIMEOUT'] = '5'
+        client = SchemaRegistryClient('http://localhost:38081')
+        assert client.timeout == 5.0
+
+        captured = {}
+
+        def capture_request(self, method, url, **kwargs):
+            captured.update(kwargs)
+            return None
+
+        requests.Session.request = capture_request
+        try:
+            client.session.get('http://example.invalid')
+        finally:
+            requests.Session.request = original_request
+        assert captured.get('timeout') == 5.0
+
+        os.environ['HTTP_TIMEOUT'] = 'invalid'
+        client = SchemaRegistryClient('http://localhost:38081')
+        assert client.timeout == srm.DEFAULT_HTTP_TIMEOUT
+    finally:
+        requests.Session.request = original_request
+        if original_timeout is None:
+            os.environ.pop('HTTP_TIMEOUT', None)
+        else:
+            os.environ['HTTP_TIMEOUT'] = original_timeout
+    return True
+
+
 def main():
     """Run all tests."""
     tests = [
@@ -2719,7 +2762,8 @@ def main():
         (21, "Global mode unit test", test_set_mode_for_all_subjects_unit),
         (22, "Selective subject cleanup test", run_test_cleanup_specific_subjects),
         (23, "Schema version comparison test", run_test_compare_schema_versions),
-        (24, "Version gap preservation test", run_test_version_gap_preservation)
+        (24, "Version gap preservation test", run_test_version_gap_preservation),
+        (25, "HTTP timeout test", run_http_timeout_test)
     ]
 
     success = True

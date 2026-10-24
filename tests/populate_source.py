@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 
 import os
+import sys
 import json
 import requests
 import logging
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from schema_registry_migrator import TimeoutSession, get_http_timeout
 
 # Configure logging
 logging.basicConfig(
@@ -17,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 def create_session_with_retries() -> requests.Session:
     """Create a requests session with retry logic."""
-    session = requests.Session()
+    session = TimeoutSession(get_http_timeout())
     retry_strategy = Retry(
         total=3,
         backoff_factor=1,

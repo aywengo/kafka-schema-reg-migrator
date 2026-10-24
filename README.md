@@ -31,7 +31,12 @@ A tool for migrating schemas between Kafka Schema Registry instances, with suppo
 1. Clone this repository
 2. Install dependencies:
 ```bash
-pip install -r requirements.txt
+pip install --require-hashes -r requirements.txt
+```
+
+`requirements.txt` is a hash-pinned lock file generated from `requirements.in`. To update it:
+```bash
+uv pip compile requirements.in --universal --generate-hashes --python-version 3.13 -o requirements.txt
 ```
 
 ### Option 2: Docker Installation
@@ -80,6 +85,9 @@ RETRY_FAILED=true        # Set to false to disable retry of failed migrations
 PERMANENT_DELETE=true    # Set to false to use soft delete when cleaning up
 DEST_MODE_AFTER_MIGRATION=READWRITE  # Global mode to set after migration
 LOG_LEVEL=INFO          # Logging level (DEBUG, INFO, WARNING, ERROR)
+
+# HTTP
+HTTP_TIMEOUT=30          # Timeout in seconds for each Schema Registry request
 ```
 
 ## Usage

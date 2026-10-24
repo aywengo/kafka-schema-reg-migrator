@@ -18,6 +18,36 @@ logger = logging.getLogger(__name__)
 # Load environment variables
 load_dotenv()
 
+DEFAULT_HTTP_TIMEOUT = 30.0
+
+
+def get_http_timeout() -> float:
+    """Return the HTTP timeout in seconds, configurable via HTTP_TIMEOUT."""
+    raw = os.getenv('HTTP_TIMEOUT', str(DEFAULT_HTTP_TIMEOUT))
+    try:
+        timeout = float(raw)
+        if timeout <= 0:
+            raise ValueError
+        return timeout
+    except ValueError:
+        logger.warning(
+            f"Invalid HTTP_TIMEOUT value {raw!r}; using {DEFAULT_HTTP_TIMEOUT} seconds"
+        )
+        return DEFAULT_HTTP_TIMEOUT
+
+
+class TimeoutSession(requests.Session):
+    """requests Session that applies a default timeout to every request."""
+
+    def __init__(self, timeout: float):
+        super().__init__()
+        self.timeout = timeout
+
+    def request(self, method, url, **kwargs):
+        kwargs.setdefault('timeout', self.timeout)
+        return super().request(method, url, **kwargs)
+
+
 class SchemaRegistryClient:
     def __init__(
         self,
@@ -33,10 +63,13 @@ class SchemaRegistryClient:
         self.url = url.rstrip('/')
         self.auth = (username, password) if username and password else None
         self.context = context
-        self.session = requests.Session()
+        self.timeout = get_http_timeout()
+        self.session = TimeoutSession(self.timeout)
         if self.auth:
             self.session.auth = self.auth
-        logger.info(f"Initialized SchemaRegistryClient for {url}")
+        logger.info(
+            f"Initialized SchemaRegistryClient for {url} (timeout: {self.timeout}s)"
+        )
 
     def _get_url(self, path: str) -> str:
         """Construct URL with optional context."""

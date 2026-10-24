@@ -8,6 +8,7 @@ on:
       - 'Dockerfile'
       - '*.py'
       - 'requirements.txt'
+      - 'requirements.in'
       - '.github/workflows/build.yml'
   pull_request:
     branches:
@@ -16,6 +17,7 @@ on:
       - 'Dockerfile'
       - '*.py'
       - 'requirements.txt'
+      - 'requirements.in'
       - '.github/workflows/build.yml'
   workflow_dispatch:
 

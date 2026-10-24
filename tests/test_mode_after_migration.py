@@ -14,13 +14,13 @@ from typing import Dict, List
 
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from schema_registry_migrator import SchemaRegistryClient
+from schema_registry_migrator import SchemaRegistryClient, TimeoutSession, get_http_timeout
 
 
 @pytest.fixture
 def session():
     """Create a requests session for tests."""
-    return requests.Session()
+    return TimeoutSession(get_http_timeout())
 
 
 @pytest.fixture
@@ -62,7 +62,7 @@ class TestModeAfterMigration:
     
     def setup_method(self):
         """Setup before each test."""
-        session = requests.Session()
+        session = TimeoutSession(get_http_timeout())
         cleanup_registry("http://localhost:38081", session)
         cleanup_registry("http://localhost:38082", session)
         time.sleep(1)
