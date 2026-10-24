@@ -19,7 +19,7 @@ A tool for migrating schemas between Kafka Schema Registry instances, with suppo
 
 ## Prerequisites
 
-- **Python 3.8+** (for running scripts and tests locally)
+- **Python 3.10+** (for running scripts and tests locally; the Docker image uses 3.13)
 - **Docker** (for running the test environment and/or containerized usage)
 - **Docker Compose** (for orchestrating multi-container test environments; v2 recommended)
 - **git** (optional, for cloning the repository)
