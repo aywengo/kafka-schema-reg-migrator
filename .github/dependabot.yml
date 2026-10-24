@@ -19,3 +19,7 @@ updates:
     directory: "/tests"
     schedule:
       interval: weekly
+    groups:
+      confluent-platform:
+        patterns:
+          - "confluentinc/*"
