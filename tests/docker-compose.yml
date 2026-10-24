@@ -1,6 +1,6 @@
 services:
   kafka-source:
-    image: confluentinc/cp-kafka:8.2.4
+    image: confluentinc/cp-kafka:8.3.2
     hostname: kafka-source
     container_name: kafka-source
     ports:
@@ -33,7 +33,7 @@ services:
       retries: 10
 
   kafka-dest:
-    image: confluentinc/cp-kafka:8.2.4
+    image: confluentinc/cp-kafka:8.3.2
     hostname: kafka-dest
     container_name: kafka-dest
     ports:
