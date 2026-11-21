@@ -110,7 +110,7 @@ services:
       start_period: 30s
 
   akhq-ui:
-    image: tchiotludo/akhq:0.28.0
+    image: tchiotludo/akhq:0.29.0
     depends_on:
       - schema-registry-source
       - schema-registry-dest
